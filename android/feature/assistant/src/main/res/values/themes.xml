@@ -1,8 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.Goga" parent="Theme.Material3.DayNight.NoActionBar" />
-
-    <style name="Theme.Goga.Overlay" parent="Theme.Goga">
+    <style name="Theme.Goga.Session" parent="Theme.Material3.DayNight.NoActionBar">
         <item name="android:windowIsTranslucent">true</item>
         <item name="android:windowBackground">@android:color/transparent</item>
         <item name="android:windowNoTitle">true</item>

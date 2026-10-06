@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="overlay_title">Гога</string>
+    <string name="overlay_close">Закрыть</string>
+    <string name="overlay_listen">Слушать</string>
+    <string name="overlay_stop">Стоп</string>
+    <string name="overlay_send">Отправить</string>
+    <string name="overlay_hint">Напишите, если не хотите говорить</string>
+    <string name="overlay_grant_mic">Разрешить микрофон</string>
+    <string name="overlay_mic_missing">Микрофон не разрешён. Можно ответить текстом.</string>
+    <string name="overlay_system_speech">Офлайн-пакет русского не найден, использую системное распознавание.</string>
+    <string name="overlay_no_russian_voice">Русский голос синтеза не установлен. Ответ останется на экране.</string>
+    <string name="overlay_you">Вы</string>
+</resources>
