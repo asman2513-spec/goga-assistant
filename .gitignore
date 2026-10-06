@@ -1,0 +1,42 @@
+# Secrets and machine-local config
+.env
+.env.*
+!.env.example
+!.env.production.example
+local.properties
+**/google-services.json
+*.jks
+*.keystore
+*.pem
+*.p12
+*.key
+secrets/
+
+# Gradle / Kotlin
+.gradle/
+**/build/
+.kotlin/
+
+# Android
+.cxx/
+captures/
+*.apk
+*.ap_
+*.aab
+.externalNativeBuild/
+*.hprof
+
+# Server data (root, the gateway working directory, and a local prod stack)
+/data/
+/server/data/
+/deploy/data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# IDE and OS
+.idea/
+*.iml
+.DS_Store
+.vscode/

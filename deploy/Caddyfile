@@ -1,0 +1,23 @@
+# Reverse proxy for the Goga gateway. Host and port come from the environment
+# (GOGA_DOMAIN, GOGA_HTTPS_PORT) so the same file works on any server.
+{
+	http_port 80
+	https_port {$GOGA_HTTPS_PORT:443}
+}
+
+{$GOGA_DOMAIN}:{$GOGA_HTTPS_PORT:443} {
+	tls {
+		issuer acme {
+			# Let's Encrypt validates TLS-ALPN only on public :443. When the
+			# HTTPS port is not 443 (or 443 belongs to another service) use the
+			# HTTP-01 challenge on :80 only.
+			disable_tlsalpn_challenge
+		}
+	}
+	reverse_proxy gateway:8080
+	header -Server
+}
+
+http://{$GOGA_DOMAIN} {
+	redir https://{$GOGA_DOMAIN}:{$GOGA_HTTPS_PORT:443}{uri} permanent
+}

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="tasks_title">Задачи и напоминания</string>
+    <string name="tasks_body">Список пока пуст. Напоминания будут срабатывать по будильникам телефона, с кнопками «Готово», «Отложить» и «Ответить голосом».</string>
+</resources>

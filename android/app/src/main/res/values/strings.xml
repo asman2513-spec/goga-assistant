@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Гога</string>
+    <string name="tab_today">Сегодня</string>
+    <string name="tab_tasks">Задачи</string>
+    <string name="tab_notes">Заметки</string>
+    <string name="tab_settings">Настройки</string>
+    <string name="today_title">Сегодня</string>
+    <string name="today_body">Здесь будут события календаря, задачи и напоминания на день.</string>
+    <string name="today_assistant">Голосовой помощник появится на следующем этапе. Пока можно смотреть разделы ниже.</string>
+    <string name="settings_title">Настройки</string>
+    <string name="settings_stage">Этап 0: каркас приложения и шлюза. Привязка телефона, роль помощника, распознавание речи и будильники появятся позже.</string>
+    <string name="settings_pairing">Телефон привязывается один раз по коду. Токен устройства будет храниться в Android Keystore. Входа по аккаунту нет.</string>
+    <string name="settings_push">Канал push (FCM) пока только интерфейс. Сборка не требует google-services.json.</string>
+    <string name="settings_magicos">Экран проверки MagicOS — автозапуск, батарея, точные будильники — будет на этапе проверки на телефоне.</string>
+</resources>
