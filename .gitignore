@@ -2,6 +2,7 @@
 .env
 .env.*
 !.env.example
+!.env.production.example
 local.properties
 **/google-services.json
 *.jks
@@ -25,9 +26,10 @@ captures/
 .externalNativeBuild/
 *.hprof
 
-# Server data (root and the gateway working directory only)
+# Server data (root, the gateway working directory, and a local prod stack)
 /data/
 /server/data/
+/deploy/data/
 *.db
 *.db-journal
 *.db-wal

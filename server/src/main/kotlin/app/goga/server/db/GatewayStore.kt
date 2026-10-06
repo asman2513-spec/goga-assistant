@@ -151,6 +151,25 @@ class GatewayStore(
         }
     }
 
+    /** Marks the device revoked. A second call for the same id is a no-op success. */
+    fun revokeDevice(deviceId: String) {
+        val now = now()
+        tx { sql ->
+            val exists = sql.one("SELECT 1 FROM devices WHERE id = ?", deviceId) { 1 } != null
+            if (!exists) notFound("Device not found")
+            sql.update(
+                """
+                UPDATE devices
+                SET revoked_at = ?, updated_at = ?
+                WHERE id = ? AND revoked_at IS NULL
+                """.trimIndent(),
+                now,
+                now,
+                deviceId,
+            )
+        }
+    }
+
     fun createCommand(device: DevicePrincipal, request: CreateCommandRequest): Pair<CommandDto, Boolean> {
         val key = request.idempotencyKey.trim()
         requireUuid(key, "idempotency_key")

@@ -4,7 +4,8 @@ services:
       context: .
       dockerfile: server/Dockerfile
     ports:
-      - "8080:8080"
+      # Loopback only. Without a host firewall, 0.0.0.0 would expose the gateway.
+      - "127.0.0.1:8080:8080"
     environment:
       HOST: 0.0.0.0
       PORT: "8080"

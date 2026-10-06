@@ -5,7 +5,7 @@ info:
   description: |
     Stage 0 API between the phone and Grok Bot.
     Device calls use `Authorization: Bearer <device_token>`.
-    Pairing-code minting uses `Authorization: Bearer <GATEWAY_BOOTSTRAP_TOKEN>`.
+    Pairing-code minting and device revocation use `Authorization: Bearer <GATEWAY_BOOTSTRAP_TOKEN>`.
     Bot callbacks use HMAC headers documented in docs/bot-integration.md.
 servers:
   - url: /
@@ -67,6 +67,25 @@ paths:
               schema:
                 $ref: "#/components/schemas/PairDeviceResponse"
         "401":
+          $ref: "#/components/responses/Error"
+  /v1/devices/{id}:
+    delete:
+      summary: Revoke a paired device
+      description: |
+        Bootstrap token only. Sets `revoked_at`; the row stays so notes and commands keep their foreign key.
+        The device token stops working immediately. Repeating the call is 204. An unknown id is 404.
+      security:
+        - bootstrap: []
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "204":
+          description: Revoked, or already revoked
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "404":
           $ref: "#/components/responses/Error"
   /v1/devices/me:
     get:

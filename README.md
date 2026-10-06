@@ -8,8 +8,9 @@
 
 - `android/` — Kotlin, Jetpack Compose, несколько модулей.
 - `server/` — шлюз на Kotlin/Ktor, Docker.
+- `deploy/` — прод: Caddy, Let's Encrypt, бэкап. Как поднять и перенести: [docs/deploy.md](docs/deploy.md).
 - `shared/model` — общие модели для телефона и шлюза.
-- `docs/` — [план v1](docs/goga-v1-plan.md), [дизайн](docs/voice-assistant-design.md), [архитектура](docs/architecture.md), [контракт с ботом](docs/bot-integration.md).
+- `docs/` — [план v1](docs/goga-v1-plan.md), [дизайн](docs/voice-assistant-design.md), [архитектура](docs/architecture.md), [контракт с ботом](docs/bot-integration.md), [деплой](docs/deploy.md).
 
 `minSdk` 31, потому что распознавание речи на устройстве требует API 31. `targetSdk` 36 — Android 16.
 
@@ -21,7 +22,7 @@
 docker compose up --build
 ```
 
-По умолчанию поднят mock-бот: команда с телефона доходит до шлюза, шлюз сам отвечает и кладёт результат обратно. Секреты в compose — заглушки для локального запуска. Перед тем как открыть порт наружу, скопируйте `.env.example` в `.env` и замените их. Настоящий URL бота и ключи в git не кладутся.
+По умолчанию поднят mock-бот: команда с телефона доходит до шлюза, шлюз сам отвечает и кладёт результат обратно. Порт опубликован только как `127.0.0.1:8080`: без файрвола шлюз не виден с других машин. Секреты в compose — заглушки для локального запуска. Для настоящего запуска скопируйте `.env.example` в `.env` и замените их. Настоящий URL бота и ключи в git не кладутся. Прод (Caddy, свой домен, бэкап): [docs/deploy.md](docs/deploy.md).
 
 Проверка круга, когда контейнер уже отвечает:
 
@@ -54,6 +55,14 @@ curl -sS -X POST http://127.0.0.1:8080/v1/devices/pair \
 ```
 
 Дальше телефон шлёт `Authorization: Bearer <device_token>`.
+
+Отозвать устройство (токен сразу перестаёт работать; повтор того же запроса тоже `204`):
+
+```bash
+curl -sS -o /dev/null -w '%{http_code}\n' -X DELETE \
+  "http://127.0.0.1:8080/v1/devices/$DEVICE_ID" \
+  -H "Authorization: Bearer $GATEWAY_BOOTSTRAP_TOKEN"
+```
 
 База по умолчанию SQLite в томе Docker. PostgreSQL — другой `DATABASE_URL` (`jdbc:postgresql://...`) и `DATABASE_USER` / `DATABASE_PASSWORD`. Отдельный облачный сервис не требуется.
 

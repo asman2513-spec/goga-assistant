@@ -170,6 +170,46 @@ class GatewayIntegrationTest {
     }
 
     @Test
+    fun bootstrapTokenRevokesADeviceAndTheTokenStopsWorking() = withGateway {
+        val device = pair()
+        val me = client.get("$baseUrl/v1/devices/me") { bearer(device.deviceToken) }
+        assertEquals(200, me.status.value)
+
+        val missing = client.delete("$baseUrl/v1/devices/${device.deviceId}")
+        assertEquals(401, missing.status.value)
+        val asDevice = client.delete("$baseUrl/v1/devices/${device.deviceId}") { bearer(device.deviceToken) }
+        assertEquals(401, asDevice.status.value)
+
+        val revoked = client.delete("$baseUrl/v1/devices/${device.deviceId}") {
+            header(HttpHeaders.Authorization, "Bearer ${config.bootstrapToken}")
+        }
+        assertEquals(204, revoked.status.value)
+        val again = client.delete("$baseUrl/v1/devices/${device.deviceId}") {
+            header(HttpHeaders.Authorization, "Bearer ${config.bootstrapToken}")
+        }
+        assertEquals(204, again.status.value)
+
+        val after = client.get("$baseUrl/v1/devices/me") { bearer(device.deviceToken) }
+        assertEquals(401, after.status.value)
+        val command = client.post("$baseUrl/v1/commands") {
+            bearer(device.deviceToken)
+            contentType(ContentType.Application.Json)
+            setBody(CreateCommandRequest(idempotencyKey = UUID.randomUUID().toString(), text = "после отзыва", source = "text"))
+        }
+        assertEquals(401, command.status.value)
+
+        val unknown = client.delete("$baseUrl/v1/devices/${UUID.randomUUID()}") {
+            header(HttpHeaders.Authorization, "Bearer ${config.bootstrapToken}")
+        }
+        assertEquals(404, unknown.status.value)
+        val badId = client.delete("$baseUrl/v1/devices/not-a-uuid") {
+            header(HttpHeaders.Authorization, "Bearer ${config.bootstrapToken}")
+        }
+        assertEquals(400, badId.status.value)
+        assertTrue(client.get("$baseUrl/openapi.yaml").bodyAsText().contains("/v1/devices/{id}"))
+    }
+
+    @Test
     fun shellScriptDeliversAnUnsolicitedSummary() = withGateway {
         val device = pair()
         val eventId = UUID.randomUUID().toString()

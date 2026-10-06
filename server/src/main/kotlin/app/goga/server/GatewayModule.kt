@@ -132,6 +132,12 @@ fun Application.gatewayModule(
                 val body = call.receiveBody<PairDeviceRequest>()
                 call.respond(HttpStatusCode.Created, blockingDb { store.pairDevice(body.code, body.deviceName) })
             }
+            delete("/devices/{id}") {
+                requireBootstrap(config)
+                val id = pathUuid("id")
+                blockingDb { store.revokeDevice(id) }
+                call.respond(HttpStatusCode.NoContent)
+            }
             post("/bot/results") {
                 val timestamp = call.request.header(BotHeaders.TIMESTAMP).orEmpty()
                 val signature = call.request.header(BotHeaders.SIGNATURE).orEmpty().trim().lowercase()

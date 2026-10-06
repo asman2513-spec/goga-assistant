@@ -42,7 +42,9 @@
 
 Kotlin, Ktor, JDBC. По умолчанию SQLite (`DATABASE_URL=jdbc:sqlite:...`). PostgreSQL — тот же код и драйвер `org.postgresql`, если URL начинается с `jdbc:postgresql:`. В CI гоняется SQLite. SQL общий: текстовые UUID, `ON CONFLICT`, без типов только SQLite.
 
-Один пользователь. При первом запуске создаётся строка `users` с UUID. `SINGLE_USER_ID` учитывается только если таблица пуста. У заметок, команд и устройств есть `user_id`, `created_at`, `updated_at`. Токен устройства и код сопряжения в базе лежат как SHA-256.
+Один пользователь. При первом запуске создаётся строка `users` с UUID. `SINGLE_USER_ID` учитывается только если таблица пуста. У заметок, команд и устройств есть `user_id`, `created_at`, `updated_at`. Токен устройства и код сопряжения в базе лежат как SHA-256. `DELETE /v1/devices/{id}` с bootstrap-токеном ставит `revoked_at`: строка остаётся, токен перестаёт работать.
+
+Локальный `docker-compose.yml` публикует порт только на `127.0.0.1:8080`. Прод — `deploy/` (Caddy, Let's Encrypt, шлюз без опубликованного порта): [deploy.md](deploy.md).
 
 Очередь — таблица `commands`. Воркер забирает `queued`, ставит `dispatched` и вызывает `BotBridge`. `WebhookBotBridge` шлёт HTTP. `MockBotBridge` подписывает ответ и бьёт в живой `POST /v1/bot/results`, поэтому тест видит тот же путь, что и настоящий бот.
 

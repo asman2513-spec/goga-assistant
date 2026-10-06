@@ -204,7 +204,7 @@ curl --fail-with-body -sS -X POST "$GATEWAY_URL/v1/bot/results" \
 Это не вызовы бота, но без них нечего отвечать.
 
 1. Кто-то с `GATEWAY_BOOTSTRAP_TOKEN` делает `POST /v1/pairing-codes` и получает одноразовый код на 10 минут (`PAIRING_CODE_TTL_SECONDS`). Бот тоже может выписать код, если ему дали этот токен: `Authorization: Bearer <GATEWAY_BOOTSTRAP_TOKEN>`.
-2. Телефон: `POST /v1/devices/pair` с кодом и именем устройства. В ответ один раз приходит `device_token`. В базе лежит только SHA-256.
+2. Телефон: `POST /v1/devices/pair` с кодом и именем устройства. В ответ один раз приходит `device_token`. В базе лежит только SHA-256. Отозвать устройство: `DELETE /v1/devices/{id}` с тем же bootstrap-токеном. Строка остаётся (`revoked_at`), заметки и команды не теряют внешний ключ, токен больше не принимается. Повтор — `204`, неизвестный id — `404`. Токеном устройства этот вызов сделать нельзя.
 3. `POST /v1/commands` с `Authorization: Bearer <device_token>`:
 
 ```json
