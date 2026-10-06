@@ -1,0 +1,591 @@
+openapi: 3.0.3
+info:
+  title: Goga gateway
+  version: 0.1.0
+  description: |
+    Stage 0 API between the phone and Grok Bot.
+    Device calls use `Authorization: Bearer <device_token>`.
+    Pairing-code minting uses `Authorization: Bearer <GATEWAY_BOOTSTRAP_TOKEN>`.
+    Bot callbacks use HMAC headers documented in docs/bot-integration.md.
+servers:
+  - url: /
+paths:
+  /health:
+    get:
+      summary: Liveness
+      responses:
+        "200":
+          description: Gateway is up
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+  /v1/health:
+    get:
+      summary: Liveness (versioned alias)
+      responses:
+        "200":
+          description: Gateway is up
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+  /openapi.yaml:
+    get:
+      summary: This document
+      responses:
+        "200":
+          description: OpenAPI YAML
+  /v1/pairing-codes:
+    post:
+      summary: Mint a one-time pairing code
+      security:
+        - bootstrap: []
+      responses:
+        "201":
+          description: Code returned once
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PairingCode"
+        "401":
+          $ref: "#/components/responses/Error"
+  /v1/devices/pair:
+    post:
+      summary: Exchange a pairing code for a device token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PairDeviceRequest"
+      responses:
+        "201":
+          description: Device token returned once
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PairDeviceResponse"
+        "401":
+          $ref: "#/components/responses/Error"
+  /v1/devices/me:
+    get:
+      summary: Identify the device for the bearer token
+      security:
+        - device: []
+      responses:
+        "200":
+          description: Device
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Device"
+        "401":
+          $ref: "#/components/responses/Error"
+  /v1/devices/push:
+    post:
+      summary: Register a push token (stored only; nothing is sent in stage 0)
+      security:
+        - device: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterPush"
+      responses:
+        "201":
+          description: Stored
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PushRegistration"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+  /v1/commands:
+    post:
+      summary: Enqueue a text command
+      security:
+        - device: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCommand"
+      responses:
+        "202":
+          description: New command queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Command"
+        "200":
+          description: Same idempotency key and text; existing command
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Command"
+        "409":
+          $ref: "#/components/responses/Error"
+  /v1/commands/{id}:
+    get:
+      summary: Command status and bot result
+      security:
+        - device: []
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: Command
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Command"
+        "404":
+          $ref: "#/components/responses/Error"
+  /v1/notes:
+    get:
+      summary: List notes for the user
+      security:
+        - device: []
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+      responses:
+        "200":
+          description: Notes
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [notes]
+                properties:
+                  notes:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Note"
+    post:
+      summary: Create a note
+      security:
+        - device: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpsertNote"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Note"
+  /v1/notes/{id}:
+    get:
+      summary: Read a note
+      security:
+        - device: []
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: Note
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Note"
+    patch:
+      summary: Update a note
+      security:
+        - device: []
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PatchNote"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Note"
+    delete:
+      summary: Soft-delete a note
+      security:
+        - device: []
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "204":
+          description: Deleted
+  /v1/events:
+    get:
+      summary: Unsolicited bot events (no command id), such as the morning summary
+      security:
+        - device: []
+      parameters:
+        - name: since
+          in: query
+          description: Exclusive lower bound, ISO-8601
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+      responses:
+        "200":
+          description: Events
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [events]
+                properties:
+                  events:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/InboundEvent"
+  /v1/bot/results:
+    post:
+      summary: Bot result or unsolicited event
+      parameters:
+        - name: X-Goga-Timestamp
+          in: header
+          required: true
+          schema:
+            type: string
+            pattern: "^[0-9]{10}$"
+        - name: X-Goga-Signature
+          in: header
+          required: true
+          description: hex HMAC-SHA256 of `{timestamp}.{raw_body}`
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BotResultRequest"
+      responses:
+        "200":
+          description: Stored, or the original result when the request is replayed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BotResultResponse"
+        "401":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+components:
+  securitySchemes:
+    device:
+      type: http
+      scheme: bearer
+    bootstrap:
+      type: http
+      scheme: bearer
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+  responses:
+    Error:
+      description: Error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+  schemas:
+    Error:
+      type: object
+      required: [error, message]
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+    Health:
+      type: object
+      required: [status, version, bridge, timezone]
+      properties:
+        status:
+          type: string
+        version:
+          type: string
+        bridge:
+          type: string
+          enum: [mock, webhook]
+        timezone:
+          type: string
+    PairingCode:
+      type: object
+      required: [code, expires_at, user_id]
+      properties:
+        code:
+          type: string
+        expires_at:
+          type: string
+        user_id:
+          type: string
+          format: uuid
+    PairDeviceRequest:
+      type: object
+      required: [code, device_name]
+      properties:
+        code:
+          type: string
+        device_name:
+          type: string
+    PairDeviceResponse:
+      type: object
+      required: [device_id, user_id, device_token, token_type]
+      properties:
+        device_id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        device_token:
+          type: string
+        token_type:
+          type: string
+    Device:
+      type: object
+      required: [device_id, user_id, name, created_at]
+      properties:
+        device_id:
+          type: string
+        user_id:
+          type: string
+        name:
+          type: string
+        created_at:
+          type: string
+    RegisterPush:
+      type: object
+      required: [channel, token]
+      properties:
+        channel:
+          type: string
+          enum: [fcm, rustore, websocket]
+        token:
+          type: string
+    PushRegistration:
+      type: object
+      required: [id, device_id, channel, updated_at]
+      properties:
+        id:
+          type: string
+        device_id:
+          type: string
+        channel:
+          type: string
+        updated_at:
+          type: string
+    CreateCommand:
+      type: object
+      required: [idempotency_key, text]
+      properties:
+        idempotency_key:
+          type: string
+          format: uuid
+        text:
+          type: string
+        source:
+          type: string
+          enum: [voice, text, widget, notification, system]
+          default: text
+        client_timestamp:
+          type: string
+    Command:
+      type: object
+      required: [id, user_id, device_id, idempotency_key, text, source, status, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        user_id:
+          type: string
+        device_id:
+          type: string
+        idempotency_key:
+          type: string
+        text:
+          type: string
+        source:
+          type: string
+        status:
+          type: string
+          enum: [queued, dispatched, completed, failed]
+        client_timestamp:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+        updated_at:
+          type: string
+        error:
+          type: string
+          nullable: true
+        idempotent:
+          type: boolean
+        result:
+          $ref: "#/components/schemas/CommandResult"
+    CommandResult:
+      type: object
+      required: [id, kind, created_at]
+      properties:
+        id:
+          type: string
+        kind:
+          type: string
+        reply_text:
+          type: string
+          nullable: true
+        question:
+          type: string
+          nullable: true
+        entities:
+          type: array
+          items:
+            $ref: "#/components/schemas/BotEntity"
+        created_at:
+          type: string
+    Note:
+      type: object
+      required: [id, user_id, title, body, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        user_id:
+          type: string
+        device_id:
+          type: string
+          nullable: true
+        title:
+          type: string
+        body:
+          type: string
+        created_at:
+          type: string
+        updated_at:
+          type: string
+    UpsertNote:
+      type: object
+      required: [title]
+      properties:
+        title:
+          type: string
+        body:
+          type: string
+    PatchNote:
+      type: object
+      properties:
+        title:
+          type: string
+        body:
+          type: string
+    BotEntity:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [note, task, reminder, calendar_event]
+        id:
+          type: string
+        title:
+          type: string
+        body:
+          type: string
+        payload:
+          type: object
+          additionalProperties: true
+    BotResultRequest:
+      type: object
+      required: [kind]
+      properties:
+        command_id:
+          type: string
+          format: uuid
+        event_id:
+          type: string
+          format: uuid
+        kind:
+          type: string
+          enum: [reply, clarification, event]
+        reply_text:
+          type: string
+        question:
+          type: string
+        device_id:
+          type: string
+          format: uuid
+        entities:
+          type: array
+          items:
+            $ref: "#/components/schemas/BotEntity"
+    BotResultResponse:
+      type: object
+      required: [result_id, status]
+      properties:
+        result_id:
+          type: string
+        command_id:
+          type: string
+          nullable: true
+        event_id:
+          type: string
+          nullable: true
+        status:
+          type: string
+        created_note_ids:
+          type: array
+          items:
+            type: string
+        idempotent:
+          type: boolean
+    InboundEvent:
+      type: object
+      required: [id, kind, created_at]
+      properties:
+        id:
+          type: string
+        event_id:
+          type: string
+        command_id:
+          type: string
+          nullable: true
+        kind:
+          type: string
+        reply_text:
+          type: string
+        question:
+          type: string
+        entities:
+          type: array
+          items:
+            $ref: "#/components/schemas/BotEntity"
+        created_at:
+          type: string

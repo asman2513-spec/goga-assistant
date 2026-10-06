@@ -1,0 +1,40 @@
+services:
+  gateway:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      HOST: 0.0.0.0
+      PORT: "8080"
+      DATABASE_URL: jdbc:sqlite:/data/goga.db
+      DATABASE_USER: ${DATABASE_USER:-}
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD:-}
+      GATEWAY_BOOTSTRAP_TOKEN: ${GATEWAY_BOOTSTRAP_TOKEN:-dev-bootstrap-token-change-me}
+      BOT_INBOUND_SECRET: ${BOT_INBOUND_SECRET:-dev-inbound-secret-change-me}
+      BOT_BRIDGE: ${BOT_BRIDGE:-mock}
+      BOT_WEBHOOK_URL: ${BOT_WEBHOOK_URL:-}
+      BOT_WEBHOOK_AUTH_HEADER: ${BOT_WEBHOOK_AUTH_HEADER:-Authorization}
+      BOT_WEBHOOK_AUTH_VALUE: ${BOT_WEBHOOK_AUTH_VALUE:-}
+      BOT_WEBHOOK_TIMEOUT_SECONDS: ${BOT_WEBHOOK_TIMEOUT_SECONDS:-10}
+      BOT_WEBHOOK_MAX_RETRIES: ${BOT_WEBHOOK_MAX_RETRIES:-3}
+      BOT_INBOUND_MAX_SKEW_SECONDS: ${BOT_INBOUND_MAX_SKEW_SECONDS:-300}
+      GATEWAY_PUBLIC_URL: ${GATEWAY_PUBLIC_URL:-http://127.0.0.1:8080}
+      USER_TIMEZONE: ${USER_TIMEZONE:-Europe/Moscow}
+      SINGLE_USER_DISPLAY_NAME: ${SINGLE_USER_DISPLAY_NAME:-Пользователь}
+      SINGLE_USER_ID: ${SINGLE_USER_ID:-}
+      PAIRING_CODE_TTL_SECONDS: ${PAIRING_CODE_TTL_SECONDS:-600}
+      BOT_MOCK_AUTO_REPLY: ${BOT_MOCK_AUTO_REPLY:-true}
+    volumes:
+      - goga-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+
+volumes:
+  goga-data:

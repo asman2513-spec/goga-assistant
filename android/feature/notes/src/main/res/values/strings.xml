@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="notes_title">Заметки</string>
+    <string name="notes_body">Отдельный модуль, без дат и напоминаний. Список появится, когда экран подключится к локальной базе.</string>
+</resources>

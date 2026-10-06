@@ -1,0 +1,15 @@
+.git
+.gradle
+**/.gradle
+**/build
+android
+.idea
+*.md
+!README.md
+data
+**/*.db
+**/*.db-wal
+**/*.db-shm
+.env
+.env.*
+!/.env.example

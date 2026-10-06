@@ -1,0 +1,40 @@
+# Secrets and machine-local config
+.env
+.env.*
+!.env.example
+local.properties
+**/google-services.json
+*.jks
+*.keystore
+*.pem
+*.p12
+*.key
+secrets/
+
+# Gradle / Kotlin
+.gradle/
+**/build/
+.kotlin/
+
+# Android
+.cxx/
+captures/
+*.apk
+*.ap_
+*.aab
+.externalNativeBuild/
+*.hprof
+
+# Server data (root and the gateway working directory only)
+/data/
+/server/data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# IDE and OS
+.idea/
+*.iml
+.DS_Store
+.vscode/
