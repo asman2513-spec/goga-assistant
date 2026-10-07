@@ -20,6 +20,9 @@ import android.util.Log
  * [android.provider.Settings.Secure.VOICE_RECOGNITION_SERVICE], which points at
  * [GogaRecognitionService] once Goga is the default assistant. That stub does not
  * hear the user. Text input does not use this class.
+ *
+ * Terminal callbacks only record state and post work. Calling cancel, destroy, or
+ * startListening on the recognizer thread deadlocks MagicOS and freezes the session.
  */
 class DeviceSpeechInput(
     context: Context,
@@ -33,7 +36,10 @@ class DeviceSpeechInput(
     )
     private var recognizer: SpeechRecognizer? = null
     private var active = false
+    private var settled = false
     private var generation = 0
+    private var lastPartial: String = ""
+    private var pendingMiss: Runnable? = null
 
     override val mode: SpeechMode = when {
         order.isEmpty() -> SpeechMode.UNAVAILABLE
@@ -48,35 +54,49 @@ class DeviceSpeechInput(
             return
         }
         val token = beginAttempt()
-        listenAt(0, listener, token)
+        main.post {
+            if (token == generation) listenAt(0, listener, token)
+        }
     }
 
     override fun stop() {
-        generation++
-        active = false
-        recognizer?.cancel()
+        Log.i(TAG, "stop")
+        abandon()
     }
 
     override fun release() {
-        generation++
-        active = false
-        val current = recognizer
-        recognizer = null
-        current?.destroy()
+        Log.i(TAG, "release")
+        abandon()
     }
 
     private fun beginAttempt(): Int {
+        val previous = recognizer
         generation++
-        active = false
-        recognizer?.cancel()
         active = true
+        settled = false
+        lastPartial = ""
+        recognizer = null
+        cancelPendingMiss()
+        quietDestroy(previous)
         return generation
     }
 
+    private fun abandon() {
+        val previous = recognizer
+        generation++
+        active = false
+        settled = true
+        lastPartial = ""
+        recognizer = null
+        cancelPendingMiss()
+        quietDestroy(previous)
+    }
+
     private fun listenAt(index: Int, listener: SpeechListener, token: Int) {
-        if (!active || token != generation) return
+        if (!active || token != generation || settled) return
         val candidate = order.getOrNull(index)
         if (candidate == null) {
+            settled = true
             active = false
             deliver { listener.onFailure(ListenFailure.UNAVAILABLE) }
             return
@@ -87,18 +107,21 @@ class DeviceSpeechInput(
             SpeechRecognizer.createSpeechRecognizer(appContext, component)
         } catch (error: RuntimeException) {
             Log.w(TAG, "create failed ${component.flattenToShortString()}", error)
-            listenAt(index + 1, listener, token)
+            main.post { listenAt(index + 1, listener, token) }
             return
         }
-        swapRecognizer(created)
+        recognizer = created
         created.setRecognitionListener(listenerFor(component, index, listener, token))
         try {
             created.startListening(recognizeIntent())
         } catch (error: RuntimeException) {
             Log.w(TAG, "startListening threw ${component.flattenToShortString()}", error)
+            recognizer = null
+            quietDestroy(created)
             if (index + 1 < order.size) {
                 main.post { listenAt(index + 1, listener, token) }
             } else {
+                settled = true
                 active = false
                 deliver { listener.onFailure(ListenFailure.UNKNOWN) }
             }
@@ -124,44 +147,154 @@ class DeviceSpeechInput(
         override fun onEndOfSpeech() = Unit
 
         override fun onError(error: Int) {
-            if (!active || token != generation) return
-            Log.w(TAG, "error $error ${component.flattenToShortString()}")
-            if (shouldTryNext(error) && index + 1 < order.size) {
-                main.post { listenAt(index + 1, listener, token) }
-                return
+            main.post {
+                if (token != generation || settled) return@post
+                Log.w(
+                    TAG,
+                    "error=$error ${errorName(error)} ${component.flattenToShortString()} partial=$lastPartial",
+                )
+                settle(component, index, listener, token, finalText = null, error = error)
             }
-            active = false
-            deliver { listener.onFailure(mapError(error)) }
         }
 
         override fun onResults(results: Bundle?) {
-            if (!active || token != generation) return
-            active = false
             val text = results.bestText()
-            Log.i(TAG, "result ${component.flattenToShortString()} text=${text.orEmpty()}")
-            deliver {
-                if (text.isNullOrBlank()) listener.onFailure(ListenFailure.NO_MATCH)
-                else listener.onFinal(text)
+            main.post {
+                if (token != generation || settled) return@post
+                Log.i(TAG, "final raw=${text.orEmpty()} partial=$lastPartial")
+                settle(component, index, listener, token, finalText = text, error = null)
             }
         }
 
         override fun onPartialResults(partialResults: Bundle?) {
-            if (!active || token != generation) return
             val text = partialResults.bestText() ?: return
-            Log.d(TAG, "partial $text")
-            deliver { listener.onPartial(text) }
+            main.post {
+                if (token != generation || settled) return@post
+                lastPartial = text
+                Log.i(TAG, "partial raw=$text")
+                listener.onPartial(text)
+            }
+        }
+
+        override fun onSegmentResults(segmentResults: Bundle) {
+            val text = segmentResults.bestText() ?: return
+            main.post {
+                if (token != generation || settled) return@post
+                lastPartial = text
+                Log.i(TAG, "segment raw=$text")
+                listener.onPartial(text)
+            }
+        }
+
+        override fun onEndOfSegmentedSession() {
+            main.post {
+                if (token != generation || settled) return@post
+                Log.i(TAG, "segment end partial=$lastPartial")
+                settle(component, index, listener, token, finalText = null, error = null)
+            }
         }
 
         override fun onEvent(eventType: Int, params: Bundle?) = Unit
     }
 
-    private fun swapRecognizer(next: SpeechRecognizer) {
-        val previous = recognizer
-        recognizer = next
-        if (previous != null) {
+    private fun settle(
+        component: ComponentName,
+        index: Int,
+        listener: SpeechListener,
+        token: Int,
+        finalText: String?,
+        error: Int?,
+    ) {
+        if (token != generation || settled) return
+        val transcript = resolveTranscript(finalText, lastPartial)
+        val softMiss = transcript == null && (
+            error == null ||
+                error == SpeechRecognizer.ERROR_NO_MATCH ||
+                error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT
+            )
+        if (softMiss) {
+            if (pendingMiss != null) return
+            val runnable = Runnable {
+                pendingMiss = null
+                if (token != generation || settled) return@Runnable
+                Log.i(TAG, "miss timeout partial=$lastPartial")
+                finishAttempt(
+                    component,
+                    index,
+                    listener,
+                    token,
+                    finalText = null,
+                    error = error ?: SpeechRecognizer.ERROR_NO_MATCH,
+                )
+            }
+            pendingMiss = runnable
+            main.postDelayed(runnable, MISS_GRACE_MS)
+            return
+        }
+        cancelPendingMiss()
+        finishAttempt(component, index, listener, token, finalText, error)
+    }
+
+    private fun finishAttempt(
+        component: ComponentName,
+        index: Int,
+        listener: SpeechListener,
+        token: Int,
+        finalText: String?,
+        error: Int?,
+    ) {
+        if (token != generation || settled) return
+        settled = true
+        active = false
+        val transcript = resolveTranscript(finalText, lastPartial)
+        val captured = recognizer
+        recognizer = null
+        val errorLabel = error?.let { "$it ${errorName(it)}" } ?: "-"
+        Log.i(
+            TAG,
+            "settle raw=${finalText.orEmpty()} partial=$lastPartial transcript=${transcript.orEmpty()} error=$errorLabel",
+        )
+        if (transcript == null && error != null && shouldTryNext(error) && index + 1 < order.size) {
+            quietDestroy(captured)
             main.post {
-                previous.cancel()
-                previous.destroy()
+                if (token != generation) return@post
+                settled = false
+                active = true
+                lastPartial = ""
+                listenAt(index + 1, listener, token)
+            }
+            return
+        }
+        quietDestroy(captured)
+        main.post {
+            if (token != generation) return@post
+            if (!transcript.isNullOrBlank()) {
+                if (transcript != finalText?.trim()) Log.i(TAG, "promoted transcript=$transcript")
+                listener.onFinal(transcript)
+            } else {
+                listener.onFailure(if (error != null) mapError(error) else ListenFailure.NO_MATCH)
+            }
+        }
+    }
+
+    private fun cancelPendingMiss() {
+        pendingMiss?.let { main.removeCallbacks(it) }
+        pendingMiss = null
+    }
+
+    /** Posted so the recognizer callback has already returned. Never call inline. */
+    private fun quietDestroy(instance: SpeechRecognizer?) {
+        if (instance == null) return
+        main.post {
+            try {
+                instance.cancel()
+            } catch (error: RuntimeException) {
+                Log.w(TAG, "cancel failed", error)
+            }
+            try {
+                instance.destroy()
+            } catch (error: RuntimeException) {
+                Log.w(TAG, "destroy failed", error)
             }
         }
     }
@@ -186,6 +319,7 @@ class DeviceSpeechInput(
     private companion object {
         const val TAG = "Goga/Listen"
         const val LOCALE = "ru-RU"
+        const val MISS_GRACE_MS = 300L
         val ON_DEVICE_PACKAGES = setOf(
             "com.google.android.tts",
             "com.google.android.as",
@@ -225,8 +359,34 @@ class DeviceSpeechInput(
             else -> false
         }
 
-        fun Bundle?.bestText(): String? =
-            this?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
+        fun Bundle?.bestText(): String? {
+            if (this == null) return null
+            val keys = listOf(
+                SpeechRecognizer.RESULTS_RECOGNITION,
+                "android.speech.extra.RESULTS",
+                "query",
+                "android.speech.extra.UNSTABLE_TEXT",
+            )
+            for (key in keys) {
+                readText(key)?.let { return it }
+            }
+            return null
+        }
+
+        fun Bundle.readText(key: String): String? {
+            getString(key)?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+            getStringArrayList(key)?.firstOrNull()?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+            @Suppress("DEPRECATION")
+            val raw = get(key) ?: return null
+            val text = when (raw) {
+                is String -> raw
+                is ArrayList<*> -> raw.firstOrNull()?.toString()
+                is List<*> -> raw.firstOrNull()?.toString()
+                is Array<*> -> raw.firstOrNull()?.toString()
+                else -> null
+            }
+            return text?.trim()?.takeIf { it.isNotEmpty() }
+        }
 
         fun mapError(code: Int): ListenFailure = when (code) {
             SpeechRecognizer.ERROR_NO_MATCH -> ListenFailure.NO_MATCH
@@ -243,6 +403,22 @@ class DeviceSpeechInput(
             SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE,
             -> ListenFailure.LANGUAGE
             else -> ListenFailure.UNKNOWN
+        }
+
+        fun errorName(code: Int): String = when (code) {
+            SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "NETWORK_TIMEOUT"
+            SpeechRecognizer.ERROR_NETWORK -> "NETWORK"
+            SpeechRecognizer.ERROR_AUDIO -> "AUDIO"
+            SpeechRecognizer.ERROR_SERVER -> "SERVER"
+            SpeechRecognizer.ERROR_CLIENT -> "CLIENT"
+            SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "SPEECH_TIMEOUT"
+            SpeechRecognizer.ERROR_NO_MATCH -> "NO_MATCH"
+            SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "RECOGNIZER_BUSY"
+            SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "INSUFFICIENT_PERMISSIONS"
+            SpeechRecognizer.ERROR_SERVER_DISCONNECTED -> "SERVER_DISCONNECTED"
+            SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED -> "LANGUAGE_NOT_SUPPORTED"
+            SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE -> "LANGUAGE_UNAVAILABLE"
+            else -> "UNKNOWN"
         }
     }
 }

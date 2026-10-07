@@ -6,6 +6,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.os.Handler
+import android.os.Looper
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -62,21 +64,21 @@ fun AssistantOverlay(
     val state = stateHolder.value
     val dispatch = remember<(SessionEvent) -> Unit> {
         { event ->
+            val next = reducer.reduce(stateHolder.value, event)
             when (event) {
                 is SessionEvent.FinalText ->
-                    Log.i(TAG, "route source=${event.source} text=${event.text}")
+                    Log.i(TAG, "raw=${event.text} intent=${next.intent} reply=${next.reply}")
                 is SessionEvent.ListenFailed ->
-                    Log.w(TAG, "listen failed ${event.failure}")
+                    Log.w(TAG, "error=${event.failure}")
                 SessionEvent.ListenStarted -> Log.i(TAG, "listen requested")
                 else -> Unit
             }
-            val next = reducer.reduce(stateHolder.value, event)
-            if (event is SessionEvent.FinalText) Log.i(TAG, "route reply=${next.reply}")
             stateHolder.value = next
         }
     }
     val speech = remember { DeviceSpeechInput(context) }
     val speaker = remember { SystemSpeechOutput(context) }
+    val main = remember { Handler(Looper.getMainLooper()) }
     var micGranted by remember { mutableStateOf(hasMic(context)) }
     var askedForMic by remember { mutableStateOf(false) }
     var russianVoice by remember { mutableStateOf<Boolean?>(null) }
@@ -121,6 +123,12 @@ fun AssistantOverlay(
         }
     }
 
+    fun closeOverlay() {
+        speech.release()
+        speaker.stop()
+        main.post { onClose() }
+    }
+
     fun startListening() {
         if (!micGranted || speech.mode == SpeechMode.UNAVAILABLE) {
             Log.i(TAG, "listen skipped mic=$micGranted mode=${speech.mode}")
@@ -143,7 +151,14 @@ fun AssistantOverlay(
         }
     }
 
-    LaunchedEffect(state.turn, state.speaking, micGranted, state.preferText, speech.mode) {
+    LaunchedEffect(
+        state.turn,
+        state.speaking,
+        micGranted,
+        state.preferText,
+        state.failedListens,
+        speech.mode,
+    ) {
         val current = stateHolder.value
         if (current.speaking || current.preferText || current.listening) return@LaunchedEffect
         if (!micGranted || speech.mode == SpeechMode.UNAVAILABLE) return@LaunchedEffect
@@ -164,11 +179,7 @@ fun AssistantOverlay(
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
-                    onClick = {
-                        speech.stop()
-                        speaker.stop()
-                        onClose()
-                    },
+                    onClick = { closeOverlay() },
                 ),
         ) {
             Surface(
@@ -201,13 +212,7 @@ fun AssistantOverlay(
                             text = stringResource(R.string.overlay_title),
                             style = MaterialTheme.typography.titleLarge,
                         )
-                        TextButton(
-                            onClick = {
-                                speech.stop()
-                                speaker.stop()
-                                onClose()
-                            },
-                        ) {
+                        TextButton(onClick = { closeOverlay() }) {
                             Text(stringResource(R.string.overlay_close))
                         }
                     }

@@ -30,6 +30,16 @@ class GogaInteractionSession(context: Context) : VoiceInteractionSession(
         Log.i(TAG, "session show flags=$showFlags")
     }
 
+    override fun onHide() {
+        super.onHide()
+        Log.i(TAG, "session hide")
+    }
+
+    override fun onDestroy() {
+        Log.i(TAG, "session destroy")
+        super.onDestroy()
+    }
+
     override fun onPrepareShow(args: Bundle?, showFlags: Int) {
         super.onPrepareShow(args, showFlags)
         prepareWindow()

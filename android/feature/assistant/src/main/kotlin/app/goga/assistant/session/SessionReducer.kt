@@ -6,6 +6,7 @@ data class SessionState(
     val partial: String = "",
     val lastUser: String = "",
     val reply: String = "",
+    val intent: String = "",
     val status: String = "Слушаю",
     val failedListens: Int = 0,
     val preferText: Boolean = false,
@@ -62,6 +63,7 @@ class SessionReducer(
                 partial = "",
                 lastUser = event.text.trim(),
                 reply = turn.reply,
+                intent = turn.intent,
                 status = if (turn.asksConfirmation) "Нужно уточнение" else "Отвечаю",
                 failedListens = 0,
                 preferText = false,
@@ -75,6 +77,7 @@ class SessionReducer(
             val prefer = counts && failed >= 2
             state.copy(
                 listening = false,
+                speaking = false,
                 partial = "",
                 failedListens = failed,
                 preferText = prefer,

@@ -9,6 +9,7 @@ data class DialogTurn(
     val phase: DialogPhase,
     val reply: String,
     val asksConfirmation: Boolean,
+    val intent: String,
 )
 
 /**
@@ -25,19 +26,19 @@ class LocalDialogEngine(
         val original = raw.trim()
         val text = normalize(original)
         if (text.isEmpty()) {
-            return ask("Не расслышал. Напишите или повторите.")
+            return ask("Не расслышал. Напишите или повторите.", "empty")
         }
         when (val held = pending) {
             is Pending.NeedObject -> {
                 when {
-                    isYes(text) || isNo(text) -> return ask(questionFor(held.verb))
+                    isYes(text) || isNo(text) -> return ask(questionFor(held.verb), "need-object")
                     isStandaloneIntent(text) -> {
                         pending = null
                         return handleFresh(original, text)
                     }
                     else -> {
                         pending = null
-                        return say(acceptedDeletion(original))
+                        return say(acceptedDeletion(original), "delete")
                     }
                 }
             }
@@ -48,34 +49,36 @@ class LocalDialogEngine(
 
     private fun handleFresh(original: String, text: String): DialogTurn {
         val key = stripLeadIn(text)
-        when (key) {
-            in GREETINGS -> return say("Слушаю.")
-            in TIME_PHRASES -> return say(timeReply())
-            in DATE_PHRASES -> return say(dateReply())
-            in HELP_PHRASES -> return say(HELP_REPLY)
-            in THANKS -> return say("Пожалуйста.")
-            in YES_WORDS, in NO_WORDS -> return say("Хорошо.")
+        when (knownIntent(key)) {
+            "greeting" -> return say("Слушаю.", "greeting")
+            "time" -> return say(timeReply(), "time")
+            "date" -> return say(dateReply(), "date")
+            "help" -> return say(HELP_REPLY, "help")
+            "thanks" -> return say("Пожалуйста.", "thanks")
+            "yes", "no" -> return say("Хорошо.", "yes-no")
         }
         destructive(text)?.let { parsed ->
             if (parsed.rest.isEmpty()) {
                 pending = Pending.NeedObject(parsed.verb)
-                return ask(questionFor(parsed.verb))
+                return ask(questionFor(parsed.verb), "need-object")
             }
-            return say(acceptedDeletion(original))
+            return say(acceptedDeletion(original), "delete")
         }
-        return say(accepted(original))
+        return say(accepted(original), "accept")
     }
 
-    private fun say(reply: String): DialogTurn = DialogTurn(
+    private fun say(reply: String, intent: String): DialogTurn = DialogTurn(
         phase = DialogPhase.SPEAKING,
         reply = reply,
         asksConfirmation = false,
+        intent = intent,
     )
 
-    private fun ask(reply: String): DialogTurn = DialogTurn(
+    private fun ask(reply: String, intent: String): DialogTurn = DialogTurn(
         phase = DialogPhase.AWAITING_SHORT_REPLY,
         reply = reply,
         asksConfirmation = true,
+        intent = intent,
     )
 
     private fun timeReply(): String {
@@ -176,6 +179,13 @@ class LocalDialogEngine(
         val THANKS = setOf("спасибо", "благодарю", "спасибо гога")
         val YES_WORDS = setOf("да", "ага", "угу", "верно", "подтверждаю", "давай", "именно", "хорошо", "ок", "окей")
         val NO_WORDS = setOf("нет", "неа", "не надо", "отмена", "не удаляй", "не надо удалять", "отбой")
+        val CONTAINED_INTENTS = listOf(
+            "time" to TIME_PHRASES,
+            "date" to DATE_PHRASES,
+            "help" to HELP_PHRASES,
+            "greeting" to GREETINGS,
+            "thanks" to THANKS,
+        )
 
         const val HELP_REPLY =
             "Пока умею слушать и отвечать. Спросите, который час, или просто скажите фразу. Заметки, напоминания и бот подключу позже."
@@ -183,9 +193,37 @@ class LocalDialogEngine(
         fun normalize(raw: String): String = raw
             .lowercase(Locale.forLanguageTag("ru"))
             .replace('ё', 'е')
+            .replace('\u00A0', ' ')
+            .replace(Regex("[\\u200B\\uFEFF]"), "")
             .replace(Regex("[^\\p{L}\\p{N}\\s]"), " ")
             .replace(Regex("\\s+"), " ")
             .trim()
+
+        fun knownIntent(key: String): String? = when (key) {
+            in GREETINGS -> "greeting"
+            in TIME_PHRASES -> "time"
+            in DATE_PHRASES -> "date"
+            in HELP_PHRASES -> "help"
+            in THANKS -> "thanks"
+            in YES_WORDS -> "yes"
+            in NO_WORDS -> "no"
+            else -> containedIntent(key)
+        }
+
+        fun containedIntent(key: String): String? {
+            val padded = " $key "
+            var bestIntent: String? = null
+            var bestLength = 0
+            for ((intent, phrases) in CONTAINED_INTENTS) {
+                for (phrase in phrases) {
+                    if (phrase.length < bestLength || phrase.length < 8) continue
+                    if (!padded.contains(" $phrase ")) continue
+                    bestIntent = intent
+                    bestLength = phrase.length
+                }
+            }
+            return bestIntent
+        }
 
         fun stripLeadIn(text: String): String {
             var rest = text
@@ -201,9 +239,9 @@ class LocalDialogEngine(
         fun isNo(text: String): Boolean = stripLeadIn(text) in NO_WORDS
 
         fun isStandaloneIntent(text: String): Boolean {
-            val key = stripLeadIn(text)
-            return key in GREETINGS || key in TIME_PHRASES || key in DATE_PHRASES ||
-                key in HELP_PHRASES || key in THANKS
+            val intent = knownIntent(stripLeadIn(text))
+            return intent == "greeting" || intent == "time" || intent == "date" ||
+                intent == "help" || intent == "thanks"
         }
 
         fun destructive(text: String): Parsed? {

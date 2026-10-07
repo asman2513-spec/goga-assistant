@@ -23,6 +23,16 @@ class SessionReducerTest {
     }
 
     @Test
+    fun failureClearsSpeakingSoTheSessionCanListenAgain() {
+        val speaking = SessionState(speaking = true, listening = true, partial = "который час")
+        val failed = reducer.reduce(speaking, SessionEvent.ListenFailed(ListenFailure.NO_MATCH))
+        assertFalse(failed.speaking)
+        assertFalse(failed.listening)
+        assertEquals("", failed.partial)
+        assertEquals("Не расслышал.", failed.status)
+    }
+
+    @Test
     fun languageFailureDoesNotForceTextMode() {
         val failed = reducer.reduce(SessionState(), SessionEvent.ListenFailed(ListenFailure.LANGUAGE))
         assertFalse(failed.preferText)

@@ -122,6 +122,39 @@ class LocalDialogEngineTest {
     fun leadInStillReachesTheClock() {
         val turn = engine.onUserText("Гога, скажи который час")
         assertEquals("Сейчас 15:05.", turn.reply)
+        assertEquals("time", turn.intent)
+    }
+
+    @Test
+    fun punctuationAndCaseStillMatchTimeAndGreeting() {
+        assertEquals("time", engine.onUserText("Который час?").intent)
+        assertEquals("Слушаю.", engine.onUserText("Привет").reply)
+        assertEquals("time", engine.onUserText("ну который час").intent)
+        assertEquals("date", engine.onUserText("Какая сегодня дата?").intent)
+    }
+}
+
+class TranscriptTest {
+    @Test
+    fun finalWinsWhenPresent() {
+        assertEquals("который час", resolveTranscript("который час", "привет"))
+    }
+
+    @Test
+    fun partialFillsAnEmptyFinal() {
+        assertEquals("который час", resolveTranscript("  ", " который час "))
+        assertEquals("привет", resolveTranscript(null, "привет"))
+    }
+
+    @Test
+    fun blankPartialAndFinalAreMissing() {
+        assertEquals(null, resolveTranscript(null, " "))
+    }
+
+    @Test
+    fun punctuationOnlyFinalKeepsThePartialWords() {
+        assertEquals("Который час", resolveTranscript("?", "Который час"))
+        assertEquals("привет", resolveTranscript("...", "привет"))
     }
 }
 
