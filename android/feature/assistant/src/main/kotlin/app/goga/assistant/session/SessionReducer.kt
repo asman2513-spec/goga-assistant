@@ -12,7 +12,10 @@ data class SessionState(
     val preferText: Boolean = false,
     val listening: Boolean = false,
     val speaking: Boolean = false,
-)
+    val launch: PhoneLaunch? = null,
+) {
+    val handsOff: Boolean get() = launch?.leavesSession == true
+}
 
 sealed interface SessionEvent {
     data object ListenStarted : SessionEvent
@@ -26,6 +29,8 @@ sealed interface SessionEvent {
     data class ListenFailed(val failure: ListenFailure) : SessionEvent
 
     data object SpeechFinished : SessionEvent
+
+    data object LaunchFailed : SessionEvent
 }
 
 /**
@@ -69,6 +74,7 @@ class SessionReducer(
                 preferText = false,
                 listening = false,
                 speaking = turn.reply.isNotBlank(),
+                launch = turn.launch,
             )
         }
         is SessionEvent.ListenFailed -> {
@@ -87,12 +93,21 @@ class SessionReducer(
         }
         SessionEvent.SpeechFinished -> state.copy(
             speaking = false,
+            launch = null,
             phase = if (state.phase == DialogPhase.AWAITING_SHORT_REPLY) {
                 DialogPhase.AWAITING_SHORT_REPLY
             } else {
                 DialogPhase.LISTENING
             },
             status = if (state.phase == DialogPhase.AWAITING_SHORT_REPLY) "Нужно уточнение" else "Слушаю",
+        )
+        SessionEvent.LaunchFailed -> state.copy(
+            turn = state.turn + 1,
+            launch = null,
+            reply = "Не получилось открыть.",
+            speaking = true,
+            phase = DialogPhase.SPEAKING,
+            status = "Отвечаю",
         )
     }
 }

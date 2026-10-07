@@ -57,34 +57,75 @@ class LocalDialogEngineTest {
     }
 
     @Test
-    fun callStaysOnScreenWithoutAcceptingThePhrase() {
-        val phrases = listOf("позвони", "Позвони!", "позвони маме", "набери", "перезвони")
-        for (phrase in phrases) {
-            val turn = LocalDialogEngine { clock }.onUserText(phrase)
-            assertEquals(phrase, "call", turn.intent)
-            assertEquals("Пока не умею звонить.", turn.reply)
-            assertFalse(turn.asksConfirmation)
-        }
-        val engine = LocalDialogEngine { clock }
-        engine.onUserText("позвони маме")
+    fun callAsksThenDialsAndStillHearsTheNextPhrase() {
+        val ask = engine.onUserText("позвони")
+        assertEquals("call", ask.intent)
+        assertEquals("Кому позвонить?", ask.reply)
+        assertTrue(ask.asksConfirmation)
+        val named = engine.onUserText("маме")
+        assertEquals("Звоню маме.", named.reply)
+        assertTrue(named.launch is PhoneLaunch.Tel)
+        assertFalse(named.asksConfirmation)
         assertEquals("Слушаю.", engine.onUserText("привет").reply)
+
+        val direct = LocalDialogEngine { clock }.onUserText("набери +7 999 000 00 00")
+        assertEquals("call", direct.intent)
+        assertEquals("Звоню +7 999 000 00 00.", direct.reply)
+        val tel = direct.launch as PhoneLaunch.Tel
+        assertTrue(tel.number.contains("7999"))
     }
 
     @Test
-    fun smsAndOpenAppStayLocal() {
+    fun smsConfirmsThenSendsAndOpenNamesTheApp() {
         val local = LocalDialogEngine { clock }
-        assertEquals("sms", local.onUserText("отправь смс").intent)
-        assertEquals("Пока не умею отправлять сообщения.", local.onUserText("напиши сообщение маме").reply)
-        assertEquals("open-app", local.onUserText("открой камеру").intent)
-        assertEquals("Пока не умею открывать приложения.", local.onUserText("запусти настройки").reply)
-        assertEquals("accept", local.onUserText("купи молоко").intent)
+        val ask = local.onUserText("отправь смс маме привет")
+        assertEquals("sms", ask.intent)
+        assertEquals("Отправить маме: «привет»?", ask.reply)
+        assertTrue(ask.asksConfirmation)
+        val sent = local.onUserText("да")
+        assertEquals("Отправил маме: «привет».", sent.reply)
+        assertFalse(sent.asksConfirmation)
+        assertEquals("Слушаю.", local.onUserText("привет").reply)
+
+        val body = LocalDialogEngine { clock }
+        assertEquals("Что написать маме?", body.onUserText("напиши сообщение маме").reply)
+        assertTrue(body.onUserText("я опаздываю").reply.contains("опаздываю"))
+
+        val open = LocalDialogEngine { clock }
+        assertEquals("Открываю камеру.", open.onUserText("открой камеру").reply)
+        assertTrue(open.onUserText("открой камеру").launch is PhoneLaunch.OpenPackage)
+        assertEquals("Открываю настройки.", open.onUserText("запусти настройки").reply)
+        assertEquals("Что открыть?", open.onUserText("открой").reply)
+        assertEquals("Открываю календарь.", open.onUserText("календарь").reply)
     }
 
     @Test
-    fun ordinaryPhraseIsAcceptedWithoutAQuestion() {
-        val turn = engine.onUserText("Купи молоко")
-        assertEquals("Принял: «Купи молоко».", turn.reply)
-        assertFalse(turn.asksConfirmation)
+    fun deviceNotesClockAndUnknownStayInTheDialog() {
+        val local = LocalDialogEngine { clock }
+        assertEquals("Делаю громче.", local.onUserText("громче").reply)
+        assertEquals("Выключаю звук.", local.onUserText("без звука").reply)
+        assertEquals("Включаю фонарик.", local.onUserText("фонарик").reply)
+        assertEquals("Смотрю заряд.", local.onUserText("какой заряд").reply)
+        assertEquals("Открываю вайфай.", local.onUserText("вайфай").reply)
+        assertEquals("Записал: «купить молоко».", local.onUserText("запомни купить молоко").reply)
+        assertTrue(local.onUserText("что я просил запомнить").reply.contains("купить молоко"))
+        assertEquals("Заметки стёр.", local.onUserText("удали заметки").reply)
+        assertEquals("Пока ничего не запомнил.", local.onUserText("мои заметки").reply)
+        assertEquals("Ставлю таймер на 5 мин.", local.onUserText("таймер на 5 минут").reply)
+        assertTrue(local.onUserText("таймер на 5 минут").launch is PhoneLaunch.Clock)
+        assertEquals("Ставлю будильник на 19:00.", local.onUserText("будильник на 7 вечера").reply)
+        val unknown = local.onUserText("Купи молоко")
+        assertEquals("Пока не умею: «Купи молоко».", unknown.reply)
+        assertEquals("unknown", unknown.intent)
+        assertFalse(unknown.asksConfirmation)
+        assertEquals("Слушаю.", local.onUserText("привет").reply)
+    }
+
+    @Test
+    fun repeatSaysThePreviousLine() {
+        engine.onUserText("который час")
+        assertEquals("Сейчас 15:05.", engine.onUserText("повтори").reply)
+        assertEquals("Хорошо.", engine.onUserText("отмена").reply)
     }
 
     @Test

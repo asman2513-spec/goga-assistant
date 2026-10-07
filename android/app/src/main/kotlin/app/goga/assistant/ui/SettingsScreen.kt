@@ -5,6 +5,7 @@ import android.content.ActivityNotFoundException
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.drawable.Icon
 import android.os.Build
 import android.widget.Toast
@@ -30,6 +31,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -44,6 +46,7 @@ import app.goga.assistant.digitalAssistantSettings
 import app.goga.assistant.ignoresBatteryOptimizations
 import app.goga.assistant.systemAssistIntent
 import app.goga.assistant.ttsSettingsIntent
+import app.goga.assistant.session.PhoneRuntimePermissions
 import app.goga.assistant.voiceInputSettings
 
 @Composable
@@ -51,12 +54,14 @@ fun SettingsScreen() {
     val context = LocalContext.current
     var role by remember { mutableStateOf(context.assistantRoleState()) }
     var batteryFree by remember { mutableStateOf(context.ignoresBatteryOptimizations()) }
+    var permissionsReady by remember { mutableStateOf(context.phonePermissionsReady()) }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     DisposableEffect(lifecycle) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 role = context.assistantRoleState()
                 batteryFree = context.ignoresBatteryOptimizations()
+                permissionsReady = context.phonePermissionsReady()
             }
         }
         lifecycle.addObserver(observer)
@@ -64,6 +69,9 @@ fun SettingsScreen() {
     }
     val roleLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         role = context.assistantRoleState()
+    }
+    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        permissionsReady = context.phonePermissionsReady()
     }
     val noActivity = stringResource(R.string.settings_no_activity)
 
@@ -111,6 +119,18 @@ fun SettingsScreen() {
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+
+        Text(text = stringResource(R.string.settings_permissions_title), style = MaterialTheme.typography.titleLarge)
+        Text(
+            text = stringResource(
+                if (permissionsReady) R.string.settings_permissions_ready else R.string.settings_permissions_missing,
+            ),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Button(onClick = { permissionLauncher.launch(PhoneRuntimePermissions) }) {
+            Text(stringResource(R.string.settings_permissions_button))
+        }
 
         Text(text = stringResource(R.string.settings_voice_title), style = MaterialTheme.typography.titleLarge)
         OutlinedButton(onClick = { launch(context, context.voiceInputSettings(), noActivity) }) {
@@ -167,6 +187,10 @@ private fun roleLabel(role: AssistantRoleState): String = when {
     role.held -> stringResource(R.string.settings_role_held)
     role.available -> stringResource(R.string.settings_role_available)
     else -> stringResource(R.string.settings_role_missing)
+}
+
+private fun Context.phonePermissionsReady(): Boolean = PhoneRuntimePermissions.all { permission ->
+    ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
 }
 
 private fun launch(context: Context, intent: Intent, fallback: String) {

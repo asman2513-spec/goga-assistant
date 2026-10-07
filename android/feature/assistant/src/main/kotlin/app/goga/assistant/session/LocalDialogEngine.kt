@@ -10,17 +10,19 @@ data class DialogTurn(
     val reply: String,
     val asksConfirmation: Boolean,
     val intent: String,
+    val launch: PhoneLaunch? = null,
 )
 
 /**
- * On-device replies for the stage 1 shell. A clear phrase is accepted at once.
- * The only question is a destructive verb with no object, because there is nothing to do yet.
- * Notes, reminders, and the bot arrive in later stages; this engine does not call them.
+ * On-device replies. Clear phrases run at once. A destructive verb with no object
+ * is the only question that is not a phone step. Phone commands go through [PhoneGateway].
  */
 class LocalDialogEngine(
+    private val phone: PhoneGateway = PlannedPhoneGateway(),
     private val clock: () -> ZonedDateTime = { ZonedDateTime.now(MOSCOW) },
 ) {
     private var pending: Pending? = null
+    private var lastReply: String = ""
 
     fun onUserText(raw: String): DialogTurn {
         val original = raw.trim()
@@ -29,6 +31,7 @@ class LocalDialogEngine(
             return ask("Не расслышал. Напишите или повторите.", "empty")
         }
         when (val held = pending) {
+            is Pending.PhoneWait -> return resumePhone(held.followUp, original, text)
             is Pending.NeedObject -> {
                 when {
                     isYes(text) || isNo(text) -> return ask(questionFor(held.verb), "need-object")
@@ -55,11 +58,10 @@ class LocalDialogEngine(
             "date" -> return say(dateReply(), "date")
             "help" -> return say(HELP_REPLY, "help")
             "thanks" -> return say("Пожалуйста.", "thanks")
+            "repeat" -> return say(lastReply.ifBlank { "Пока нечего повторять." }, "repeat")
             "yes", "no" -> return say("Хорошо.", "yes-no")
-            "call" -> return say(CALL_REPLY, "call")
-            "sms" -> return say(SMS_REPLY, "sms")
-            "open-app" -> return say(OPEN_REPLY, "open-app")
         }
+        parsePhoneCommand(original)?.let { return apply(phone.handle(it)) }
         destructive(text)?.let { parsed ->
             if (parsed.rest.isEmpty()) {
                 pending = Pending.NeedObject(parsed.verb)
@@ -67,22 +69,90 @@ class LocalDialogEngine(
             }
             return say(acceptedDeletion(original), "delete")
         }
-        return say(accepted(original), "accept")
+        return say(unknown(original), "unknown")
     }
 
-    private fun say(reply: String, intent: String): DialogTurn = DialogTurn(
-        phase = DialogPhase.SPEAKING,
-        reply = reply,
-        asksConfirmation = false,
-        intent = intent,
-    )
+    private fun resumePhone(followUp: PhoneFollowUp, original: String, text: String): DialogTurn {
+        val key = stripLeadIn(text)
+        if (abandonsPhone(followUp, key)) {
+            pending = null
+            return handleFresh(original, text)
+        }
+        if (isNo(key) && followUp !is PhoneFollowUp.NeedSmsBody) {
+            pending = null
+            return say("Хорошо.", intentOf(followUp))
+        }
+        if (followUp is PhoneFollowUp.NeedSmsBody && (key == "отмена" || key == "отбой")) {
+            pending = null
+            return say("Хорошо.", "sms")
+        }
+        return when (followUp) {
+            PhoneFollowUp.NeedCallTarget -> apply(phone.handle(PhoneCommand.Call(key)))
+            is PhoneFollowUp.PickCall -> apply(phone.pickCall(key, followUp.options))
+            PhoneFollowUp.NeedSmsRecipient -> {
+                val parts = key.split(" ").filter { it.isNotEmpty() }
+                val recipient = parts.firstOrNull().orEmpty()
+                val body = parts.drop(1).joinToString(" ").ifBlank { null }
+                apply(phone.handle(PhoneCommand.Sms(recipient, body)))
+            }
+            is PhoneFollowUp.NeedSmsBody -> apply(phone.continueSms(followUp.choice, original.trim()))
+            is PhoneFollowUp.ConfirmSms -> if (isYes(key)) {
+                apply(phone.sendConfirmed(followUp.choice, followUp.body))
+            } else {
+                ask("Отправить ${followUp.choice.name}: «${followUp.body}»?", "sms")
+            }
+            is PhoneFollowUp.PickSms -> {
+                val chosen = chooseContact(key, followUp.options)
+                if (chosen == null) {
+                    ask(choiceLine(followUp.options), "sms")
+                } else {
+                    apply(phone.continueSms(chosen, followUp.body))
+                }
+            }
+            PhoneFollowUp.NeedOpenTarget -> apply(phone.handle(PhoneCommand.OpenApp(key)))
+        }
+    }
 
-    private fun ask(reply: String, intent: String): DialogTurn = DialogTurn(
-        phase = DialogPhase.AWAITING_SHORT_REPLY,
-        reply = reply,
-        asksConfirmation = true,
-        intent = intent,
-    )
+    private fun abandonsPhone(followUp: PhoneFollowUp, key: String): Boolean {
+        when (knownIntent(key)) {
+            "yes", "no", null -> Unit
+            "greeting" -> if (followUp is PhoneFollowUp.NeedSmsBody) return false else return true
+            else -> return true
+        }
+        return parsePhoneCommand(key) != null
+    }
+
+    private fun apply(outcome: PhoneOutcome): DialogTurn {
+        pending = outcome.followUp?.let { Pending.PhoneWait(it) }
+        lastReply = outcome.reply
+        return DialogTurn(
+            phase = if (outcome.asksConfirmation) DialogPhase.AWAITING_SHORT_REPLY else DialogPhase.SPEAKING,
+            reply = outcome.reply,
+            asksConfirmation = outcome.asksConfirmation,
+            intent = outcome.intent,
+            launch = outcome.launch,
+        )
+    }
+
+    private fun say(reply: String, intent: String): DialogTurn {
+        lastReply = reply
+        return DialogTurn(
+            phase = DialogPhase.SPEAKING,
+            reply = reply,
+            asksConfirmation = false,
+            intent = intent,
+        )
+    }
+
+    private fun ask(reply: String, intent: String): DialogTurn {
+        lastReply = reply
+        return DialogTurn(
+            phase = DialogPhase.AWAITING_SHORT_REPLY,
+            reply = reply,
+            asksConfirmation = true,
+            intent = intent,
+        )
+    }
 
     private fun timeReply(): String {
         val now = clock()
@@ -100,6 +170,7 @@ class LocalDialogEngine(
 
     private sealed interface Pending {
         data class NeedObject(val verb: String) : Pending
+        data class PhoneWait(val followUp: PhoneFollowUp) : Pending
     }
 
     private companion object {
@@ -226,6 +297,7 @@ class LocalDialogEngine(
             "помоги",
         )
         val THANKS = setOf("спасибо", "благодарю", "спасибо гога")
+        val REPEAT_PHRASES = setOf("повтори", "повторите", "еще раз", "повтори еще раз", "повторите еще раз")
         val YES_WORDS = setOf("да", "ага", "угу", "верно", "подтверждаю", "давай", "именно", "хорошо", "ок", "окей")
         val NO_WORDS = setOf("нет", "неа", "не надо", "отмена", "не удаляй", "не надо удалять", "отбой")
         val CONTAINED_INTENTS = listOf(
@@ -237,17 +309,14 @@ class LocalDialogEngine(
         )
 
         const val HELP_REPLY =
-            "Пока умею слушать и отвечать. Спросите, который час, или просто скажите фразу. Заметки, напоминания и бот подключу позже."
-        const val CALL_REPLY = "Пока не умею звонить."
-        const val SMS_REPLY = "Пока не умею отправлять сообщения."
-        const val OPEN_REPLY = "Пока не умею открывать приложения."
+            "Умею слушать и отвечать. Могу сказать время и дату, позвонить, написать смс, открыть приложение, изменить громкость и фонарик, сказать заряд, запомнить заметку и поставить таймер."
 
         fun normalize(raw: String): String = raw
             .lowercase(Locale.forLanguageTag("ru"))
             .replace('ё', 'е')
             .replace('\u00A0', ' ')
             .replace(Regex("[\\u200B\\uFEFF]"), "")
-            .replace(Regex("[^\\p{L}\\p{N}\\s]"), " ")
+            .replace(Regex("[^\\p{L}\\p{N}+\\s]"), " ")
             .replace(Regex("\\s+"), " ")
             .trim()
 
@@ -257,46 +326,10 @@ class LocalDialogEngine(
             key in DATE_PHRASES -> "date"
             key in HELP_PHRASES -> "help"
             key in THANKS -> "thanks"
+            key in REPEAT_PHRASES -> "repeat"
             key in YES_WORDS -> "yes"
             key in NO_WORDS -> "no"
-            else -> capabilityIntent(key) ?: containedIntent(key)
-        }
-
-        fun capabilityIntent(key: String): String? = when {
-            isCall(key) -> "call"
-            isSms(key) -> "sms"
-            isOpenApp(key) -> "open-app"
-            else -> null
-        }
-
-        fun wordsOf(key: String): List<String> = key.split(" ").filter { it.isNotEmpty() }
-
-        fun isCall(key: String): Boolean = wordsOf(key).any { word ->
-            word.startsWith("позвон") ||
-                word.startsWith("перезвон") ||
-                word.startsWith("дозвон") ||
-                word == "набери" ||
-                word == "набрать" ||
-                word == "наберите" ||
-                word == "наберу" ||
-                word == "наберем" ||
-                word == "звонок" ||
-                word == "звонки"
-        }
-
-        fun isSms(key: String): Boolean {
-            val words = wordsOf(key)
-            if (words.any { it == "sms" || it == "эсэмэс" || it.startsWith("смс") }) return true
-            val send = words.any {
-                it.startsWith("отправ") || it.startsWith("пошл") || it == "напиши" ||
-                    it == "написать" || it == "напишите"
-            }
-            val message = words.any { it.startsWith("сообщен") }
-            return send && message
-        }
-
-        fun isOpenApp(key: String): Boolean = wordsOf(key).any { word ->
-            word.startsWith("откро") || word.startsWith("запуст")
+            else -> containedIntent(key)
         }
 
         /** Clock questions, including the spoken form «сколько время» and STT slips. */
@@ -345,10 +378,15 @@ class LocalDialogEngine(
         fun isNo(text: String): Boolean = stripLeadIn(text) in NO_WORDS
 
         fun isStandaloneIntent(text: String): Boolean {
-            val intent = knownIntent(stripLeadIn(text))
-            return intent == "greeting" || intent == "time" || intent == "date" ||
-                intent == "help" || intent == "thanks" ||
-                intent == "call" || intent == "sms" || intent == "open-app"
+            val key = stripLeadIn(text)
+            val intent = knownIntent(key)
+            if (
+                intent == "greeting" || intent == "time" || intent == "date" ||
+                intent == "help" || intent == "thanks" || intent == "repeat"
+            ) {
+                return true
+            }
+            return parsePhoneCommand(text) != null
         }
 
         fun destructive(text: String): Parsed? {
@@ -369,7 +407,13 @@ class LocalDialogEngine(
             return if (trimmed.length <= 180) trimmed else trimmed.take(179).trimEnd() + "…"
         }
 
-        fun accepted(original: String): String = "Принял: «${clip(original)}»."
+        fun unknown(original: String): String = "Пока не умею: «${clip(original)}»."
+
+        fun intentOf(followUp: PhoneFollowUp): String = when (followUp) {
+            PhoneFollowUp.NeedCallTarget, is PhoneFollowUp.PickCall -> "call"
+            PhoneFollowUp.NeedOpenTarget -> "open-app"
+            else -> "sms"
+        }
 
         fun acceptedDeletion(original: String): String =
             "Принял к удалению: «${clip(original)}». Пока стирать нечего."

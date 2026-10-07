@@ -62,6 +62,29 @@ class SessionReducerTest {
     }
 
     @Test
+    fun phoneLaunchIsCopiedAndClearedWhenSpeechEnds() {
+        val heard = reducer.reduce(SessionState(), SessionEvent.FinalText("открой камеру", textSource()))
+        assertEquals("open-app", heard.intent)
+        assertTrue(heard.launch is PhoneLaunch.OpenPackage)
+        assertTrue(heard.handsOff)
+        assertTrue(heard.speaking)
+        val done = reducer.reduce(heard, SessionEvent.SpeechFinished)
+        assertEquals(null, done.launch)
+        assertFalse(done.handsOff)
+        assertFalse(done.speaking)
+    }
+
+    @Test
+    fun failedLaunchDropsTheHandoffAndSpeaks() {
+        val heard = reducer.reduce(SessionState(), SessionEvent.FinalText("открой камеру", textSource()))
+        val failed = reducer.reduce(heard, SessionEvent.LaunchFailed)
+        assertEquals(null, failed.launch)
+        assertEquals("Не получилось открыть.", failed.reply)
+        assertTrue(failed.speaking)
+        assertFalse(failed.handsOff)
+    }
+
+    @Test
     fun speechFinishedWhileWaitingKeepsTheQuestion() {
         val asked = reducer.reduce(SessionState(), SessionEvent.FinalText("удали", voiceSource()))
         val done = reducer.reduce(asked, SessionEvent.SpeechFinished)

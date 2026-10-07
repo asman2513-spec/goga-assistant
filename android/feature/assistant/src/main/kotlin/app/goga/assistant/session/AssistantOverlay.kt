@@ -56,7 +56,8 @@ fun AssistantOverlay(
     onRequestMic: () -> Unit,
 ) {
     val context = LocalContext.current
-    val dialog = remember { LocalDialogManager() }
+    val phone = remember { AndroidPhoneGateway(context.applicationContext) }
+    val dialog = remember { LocalDialogManager(LocalDialogEngine(phone = phone)) }
     val reducer = remember { SessionReducer(dialog) }
     val stateHolder = remember { mutableStateOf(SessionState()) }
     val state = stateHolder.value
@@ -157,7 +158,7 @@ fun AssistantOverlay(
         speech.mode,
     ) {
         val current = stateHolder.value
-        if (current.speaking || current.preferText || current.listening) return@LaunchedEffect
+        if (current.speaking || current.preferText || current.listening || current.handsOff) return@LaunchedEffect
         if (!micGranted || speech.mode == SpeechMode.UNAVAILABLE) return@LaunchedEffect
         startListening()
     }
@@ -165,7 +166,22 @@ fun AssistantOverlay(
     LaunchedEffect(state.turn) {
         val current = stateHolder.value
         if (current.turn == 0 || current.reply.isBlank()) return@LaunchedEffect
-        speaker.speak(current.reply) { dispatch(SessionEvent.SpeechFinished) }
+        val launch = current.launch
+        if (launch != null) speech.release()
+        speaker.speak(current.reply) {
+            if (launch == null) {
+                dispatch(SessionEvent.SpeechFinished)
+                return@speak
+            }
+            val opened = phone.performLaunch(launch)
+            if (opened && launch.leavesSession) {
+                onClose()
+            } else if (!opened) {
+                dispatch(SessionEvent.LaunchFailed)
+            } else {
+                dispatch(SessionEvent.SpeechFinished)
+            }
+        }
     }
 
     AssistantTheme {
