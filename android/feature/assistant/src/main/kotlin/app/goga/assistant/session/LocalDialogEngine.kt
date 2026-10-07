@@ -62,6 +62,7 @@ class LocalDialogEngine(
             "yes", "no" -> return say("Хорошо.", "yes-no")
         }
         parsePhoneCommand(original)?.let { return apply(phone.handle(it)) }
+        phone.suggestCall(original)?.let { return apply(it) }
         destructive(text)?.let { parsed ->
             if (parsed.rest.isEmpty()) {
                 pending = Pending.NeedObject(parsed.verb)
@@ -100,6 +101,11 @@ class LocalDialogEngine(
                 apply(phone.sendConfirmed(followUp.choice, followUp.body))
             } else {
                 ask("Отправить ${followUp.choice.name}: «${followUp.body}»?", "sms")
+            }
+            is PhoneFollowUp.ConfirmCall -> if (isYes(key)) {
+                apply(phone.pickCall(followUp.choice.name, listOf(followUp.choice)))
+            } else {
+                ask(callConfirmLine(followUp.choice.name), "call")
             }
             is PhoneFollowUp.PickSms -> {
                 val chosen = chooseContact(key, followUp.options)
@@ -410,7 +416,7 @@ class LocalDialogEngine(
         fun unknown(original: String): String = "Пока не умею: «${clip(original)}»."
 
         fun intentOf(followUp: PhoneFollowUp): String = when (followUp) {
-            PhoneFollowUp.NeedCallTarget, is PhoneFollowUp.PickCall -> "call"
+            PhoneFollowUp.NeedCallTarget, is PhoneFollowUp.PickCall, is PhoneFollowUp.ConfirmCall -> "call"
             PhoneFollowUp.NeedOpenTarget -> "open-app"
             else -> "sms"
         }

@@ -49,8 +49,10 @@ import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.coroutines.resume
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -89,6 +91,11 @@ fun AssistantOverlay(
     var closed by remember { mutableStateOf(false) }
     val listener = remember {
         object : SpeechListener {
+            override fun onReady() {
+                dispatch(PipeIn.EarReady)
+                cueListening(context)
+            }
+
             override fun onPartial(text: String) = dispatch(PipeIn.Partial(text))
             override fun onFinal(text: String) = dispatch(PipeIn.Heard(text, voiceSource()))
             override fun onFailure(failure: ListenFailure) = dispatch(PipeIn.Missed(failure))
@@ -128,6 +135,7 @@ fun AssistantOverlay(
     }
 
     fun closeOverlay() {
+        LaunchRelay.disarm()
         speech.release()
         speaker.stop()
         dispatch(PipeIn.Hide)
@@ -153,6 +161,7 @@ fun AssistantOverlay(
 
     LaunchedEffect(showToken) {
         SessionTrace.log("pipe", "show token=$showToken")
+        LaunchRelay.disarm()
         autoListen = true
         closed = false
         dispatch(PipeIn.Show)
@@ -161,6 +170,7 @@ fun AssistantOverlay(
     LaunchedEffect(hidden) {
         if (!hidden) return@LaunchedEffect
         SessionTrace.log("pipe", "hide")
+        LaunchRelay.disarm()
         speaker.stop()
         speech.release()
         dispatch(PipeIn.Hide)
@@ -184,7 +194,15 @@ fun AssistantOverlay(
                         dispatch(PipeIn.Fault("Не смог слушать."))
                         return@LaunchedEffect
                     }
-                    delay(LISTEN_TIMEOUT_MS)
+                    SessionTrace.log("listen", "ui cap armed")
+                    try {
+                        delay(LISTEN_TIMEOUT_MS)
+                    } catch (cancelled: CancellationException) {
+                        SessionTrace.log("listen", "ui cap cancelled")
+                        throw cancelled
+                    }
+                    val pending = stateHolder.value.partial
+                    SessionTrace.log("listen", "ui cap fired partial=$pending")
                     if (same(stateHolder.value, PipePhase.Listening, generation)) dispatch(PipeIn.ListenTimeout)
                 }
                 PipePhase.Thinking -> {
@@ -213,7 +231,7 @@ fun AssistantOverlay(
                     speaker.speak(reply) {
                         if (same(stateHolder.value, PipePhase.Speaking, generation)) dispatch(PipeIn.SpeechDone)
                     }
-                    delay(SPEAK_TIMEOUT_MS)
+                    delay(speechWatchdogMs(reply) + SPEAK_GRACE_MS)
                     if (same(stateHolder.value, PipePhase.Speaking, generation)) {
                         speaker.stop()
                         dispatch(PipeIn.SpeechTimeout)
@@ -221,17 +239,14 @@ fun AssistantOverlay(
                 }
                 PipePhase.Acting -> {
                     val launch = snap.launch
-                    val opened = try {
-                        launch != null && phone.performLaunch(launch, host.launch)
-                    } catch (error: Throwable) {
-                        SessionTrace.log("act", error)
+                    val opened = if (launch == null) {
                         false
+                    } else {
+                        awaitLaunch(launch, host.launch, phone::performLaunch)
                     }
                     if (!same(stateHolder.value, PipePhase.Acting, generation)) return@LaunchedEffect
                     dispatch(PipeIn.ActDone(opened))
                     if (opened && launch?.leavesSession == true) finishIfNeeded()
-                    delay(ACT_TIMEOUT_MS)
-                    if (same(stateHolder.value, PipePhase.Acting, generation)) dispatch(PipeIn.ActTimeout)
                 }
                 PipePhase.Close -> finishIfNeeded()
             }
@@ -446,9 +461,52 @@ private fun submitDraft(
 private fun same(state: PipeState, phase: PipePhase, generation: Int): Boolean =
     state.phase == phase && state.generation == generation
 
+private suspend fun awaitLaunch(
+    launch: PhoneLaunch,
+    start: (List<android.content.Intent>) -> Boolean,
+    perform: (PhoneLaunch, (List<android.content.Intent>) -> Boolean) -> Boolean,
+): Boolean {
+    val opened = withTimeoutOrNull(ACT_TIMEOUT_MS) {
+        suspendCancellableCoroutine { cont ->
+            LaunchRelay.arm { ok ->
+                if (cont.isActive) cont.resume(ok)
+            }
+            cont.invokeOnCancellation { LaunchRelay.disarm() }
+            val accepted = try {
+                perform(launch, start)
+            } catch (error: Throwable) {
+                SessionTrace.log("act", error)
+                false
+            }
+            if (!accepted && cont.isActive) {
+                LaunchRelay.disarm()
+                cont.resume(false)
+            }
+        }
+    }
+    if (opened == null) SessionTrace.log("act", "launch timed out")
+    return opened == true
+}
+
+private fun cueListening(context: Context) {
+    try {
+        val tone = android.media.ToneGenerator(android.media.AudioManager.STREAM_NOTIFICATION, 70)
+        tone.startTone(android.media.ToneGenerator.TONE_PROP_BEEP, 90)
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ tone.release() }, 250)
+    } catch (error: RuntimeException) {
+        SessionTrace.log("listen", error)
+    }
+    try {
+        val vibrator = context.getSystemService(android.os.Vibrator::class.java)
+        vibrator?.vibrate(android.os.VibrationEffect.createOneShot(40, android.os.VibrationEffect.DEFAULT_AMPLITUDE))
+    } catch (error: RuntimeException) {
+        SessionTrace.log("listen", error)
+    }
+}
+
 private const val LISTEN_TIMEOUT_MS = 10_000L
 private const val THINK_TIMEOUT_MS = 2_000L
-private const val SPEAK_TIMEOUT_MS = 12_000L
+private const val SPEAK_GRACE_MS = 600L
 private const val ACT_TIMEOUT_MS = 5_000L
 
 private const val TAG = "Goga/Route"

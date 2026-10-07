@@ -19,6 +19,7 @@ class SystemSpeechOutput(
     private var generation = 0
     private var pendingText: String? = null
     private var pendingDone: (() -> Unit)? = null
+    private var pendingToken = -1
     private var deliveredToken = -1
     private var timeout: Runnable? = null
 
@@ -49,25 +50,43 @@ class SystemSpeechOutput(
             main.post { onReady?.invoke(russian) }
             pendingText?.let { text ->
                 val done = pendingDone ?: {}
+                val token = pendingToken
                 pendingText = null
                 pendingDone = null
-                speak(text, done)
+                pendingToken = -1
+                main.post {
+                    if (token == deliveredToken || token != generation) return@post
+                    speak(text, done)
+                }
             }
         }
     }
 
     override fun speak(text: String, onDone: () -> Unit) {
-        Log.i(TAG, "speak len=${text.length}")
-        val current = engine
         val token = ++generation
+        val wait = speechWatchdogMs(text)
+        Log.i(TAG, "speak len=${text.length} ready=$ready watchdog=$wait")
+        SessionTrace.log("tts", "speak ready=$ready len=${text.length} watchdog=$wait")
+        armWatchdog(token, wait, onDone)
+        val current = engine
         if (!ready || current == null) {
             pendingText = text
             pendingDone = onDone
+            pendingToken = token
             return
         }
+        pendingText = null
+        pendingDone = null
+        pendingToken = -1
+        deliverSpeak(current, text, token, onDone)
+    }
+
+    private fun deliverSpeak(current: TextToSpeech, text: String, token: Int, onDone: () -> Unit) {
         val utterance = UUID.randomUUID().toString()
         current.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-            override fun onStart(utteranceId: String?) = Unit
+            override fun onStart(utteranceId: String?) {
+                if (utteranceId == utterance) SessionTrace.log("tts", "start")
+            }
 
             override fun onDone(utteranceId: String?) {
                 if (utteranceId == utterance) finish(token, onDone)
@@ -84,25 +103,31 @@ class SystemSpeechOutput(
             }
         })
         val queued = current.speak(text, TextToSpeech.QUEUE_FLUSH, null, utterance)
-        val timeoutMs = (text.length * 120L + 2_500L).coerceAtMost(15_000L)
+        if (queued == TextToSpeech.ERROR) {
+            Log.w(TAG, "speak rejected")
+            SessionTrace.log("tts", "rejected")
+            finish(token, onDone)
+        }
+    }
+
+    private fun armWatchdog(token: Int, waitMs: Long, onDone: () -> Unit) {
+        cancelTimeout()
         val watchdog = Runnable {
             if (token == generation) {
                 Log.w(TAG, "speak timeout")
+                SessionTrace.log("tts", "watchdog")
                 finish(token, onDone)
             }
         }
         timeout = watchdog
-        main.postDelayed(watchdog, timeoutMs)
-        if (queued == TextToSpeech.ERROR) {
-            Log.w(TAG, "speak rejected")
-            finish(token, onDone)
-        }
+        main.postDelayed(watchdog, waitMs)
     }
 
     override fun stop() {
         generation++
         pendingText = null
         pendingDone = null
+        pendingToken = -1
         cancelTimeout()
         engine?.stop()
     }
@@ -111,6 +136,7 @@ class SystemSpeechOutput(
         generation++
         pendingText = null
         pendingDone = null
+        pendingToken = -1
         onReady = null
         cancelTimeout()
         engine?.stop()
@@ -122,8 +148,14 @@ class SystemSpeechOutput(
     private fun finish(token: Int, onDone: () -> Unit) {
         if (token != generation || token == deliveredToken) return
         deliveredToken = token
+        if (pendingToken == token) {
+            pendingText = null
+            pendingDone = null
+            pendingToken = -1
+        }
         cancelTimeout()
         Log.i(TAG, "speak finished")
+        SessionTrace.log("tts", "finished")
         main.post {
             if (token == generation) onDone()
         }

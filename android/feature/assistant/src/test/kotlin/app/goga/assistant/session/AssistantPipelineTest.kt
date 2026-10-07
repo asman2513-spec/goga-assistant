@@ -39,7 +39,7 @@ class AssistantPipelineTest {
         assertTrue(driver.state.launch is PhoneLaunch.OpenPackage)
         driver.speechDone()
         assertEquals(PipePhase.Speaking, driver.state.phase)
-        assertEquals("Не получилось открыть.", driver.state.reply)
+        assertEquals("Не получилось открыть камеру.", driver.state.reply)
         assertNull(driver.state.launch)
         driver.speechDone()
         assertEquals(PipePhase.Idle, driver.state.phase)

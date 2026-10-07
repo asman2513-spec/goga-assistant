@@ -10,6 +10,7 @@
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <uses-permission android:name="android.permission.VIBRATE" />
 
     <uses-feature android:name="android.hardware.camera.flash" android:required="false" />
     <uses-feature android:name="android.hardware.telephony" android:required="false" />
@@ -71,6 +72,16 @@
             android:excludeFromRecents="true"
             android:exported="false"
             android:theme="@style/Theme.Goga.Overlay" />
+        <activity
+            android:name=".LaunchTrampolineActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:launchMode="standard"
+            android:noHistory="true"
+            android:showWhenLocked="true"
+            android:taskAffinity=""
+            android:theme="@style/Theme.Goga.Trampoline"
+            android:turnScreenOn="true" />
         <service
             android:name="app.goga.assistant.session.GogaVoiceInteractionService"
             android:exported="true"

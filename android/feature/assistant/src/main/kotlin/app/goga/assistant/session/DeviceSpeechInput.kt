@@ -45,6 +45,8 @@ class DeviceSpeechInput(
     private var lastPartial: String = ""
     private var pendingMiss: Runnable? = null
     private var pendingStart: Runnable? = null
+    private var pendingPromote: Runnable? = null
+    private var listenCap: Runnable? = null
     private var callbackListener: SpeechListener? = null
     private var callbackIndex: Int = 0
     private var callbackComponent: ComponentName? = null
@@ -94,6 +96,8 @@ class DeviceSpeechInput(
         callbackListener = null
         cancelPendingMiss()
         cancelScheduledListen()
+        cancelPromote()
+        cancelListenCap()
     }
 
     private fun beginAttempt(): Int {
@@ -104,7 +108,10 @@ class DeviceSpeechInput(
         lastPartial = ""
         cancelPendingMiss()
         cancelScheduledListen()
-        return generation
+        cancelPromote()
+        val token = generation
+        armListenCap(token)
+        return token
     }
 
     private fun abandon() {
@@ -120,6 +127,8 @@ class DeviceSpeechInput(
         callbackComponent = null
         cancelPendingMiss()
         cancelScheduledListen()
+        cancelPromote()
+        cancelListenCap()
         quietDestroy(previous)
     }
 
@@ -217,7 +226,14 @@ class DeviceSpeechInput(
 
     private val callbacks = object : RecognitionListener {
         override fun onReadyForSpeech(params: Bundle?) {
-            Log.i(TAG, "ready ${callbackComponent?.flattenToShortString()}")
+            val token = generation
+            val listener = callbackListener ?: return
+            main.post {
+                if (token != generation || settled) return@post
+                Log.i(TAG, "ready ${callbackComponent?.flattenToShortString()}")
+                SessionTrace.log("listen", "ready")
+                listener.onReady()
+            }
         }
 
         override fun onBeginningOfSpeech() = Unit
@@ -226,7 +242,14 @@ class DeviceSpeechInput(
 
         override fun onBufferReceived(buffer: ByteArray?) = Unit
 
-        override fun onEndOfSpeech() = Unit
+        override fun onEndOfSpeech() {
+            val token = generation
+            main.post {
+                if (token != generation || settled || lastPartial.isBlank()) return@post
+                SessionTrace.log("listen", "end partial=$lastPartial")
+                schedulePromote(token, ListenTiming.END_OF_SPEECH_GRACE_MS, endOfSpeech = true)
+            }
+        }
 
         override fun onError(error: Int) {
             val token = generation
@@ -262,9 +285,11 @@ class DeviceSpeechInput(
             val listener = callbackListener ?: return
             main.post {
                 if (token != generation || settled) return@post
+                if (text == lastPartial) return@post
                 lastPartial = text
                 Log.i(TAG, "partial raw=$text")
                 listener.onPartial(text)
+                schedulePromote(token, ListenTiming.PARTIAL_STABLE_MS, endOfSpeech = false)
             }
         }
 
@@ -274,9 +299,11 @@ class DeviceSpeechInput(
             val listener = callbackListener ?: return
             main.post {
                 if (token != generation || settled) return@post
+                if (text == lastPartial) return@post
                 lastPartial = text
                 Log.i(TAG, "segment raw=$text")
                 listener.onPartial(text)
+                schedulePromote(token, ListenTiming.PARTIAL_STABLE_MS, endOfSpeech = false)
             }
         }
 
@@ -357,9 +384,10 @@ class DeviceSpeechInput(
             scheduleListen(index, listener, token, RESTART_GAP_MS)
             return
         }
-        settled = true
-        active = false
         if (transcript == null && error != null && shouldTryNext(error) && index + 1 < order.size) {
+            settled = true
+            active = false
+            cancelPromote()
             val captured = recognizer
             recognizer = null
             boundComponent = null
@@ -373,6 +401,10 @@ class DeviceSpeechInput(
             }, RESTART_GAP_MS)
             return
         }
+        settled = true
+        active = false
+        cancelPromote()
+        cancelListenCap()
         main.post {
             if (token != generation) return@post
             if (!transcript.isNullOrBlank()) {
@@ -387,6 +419,59 @@ class DeviceSpeechInput(
     private fun cancelPendingMiss() {
         pendingMiss?.let { main.removeCallbacks(it) }
         pendingMiss = null
+    }
+
+    private fun armListenCap(token: Int) {
+        cancelListenCap()
+        SessionTrace.log("listen", "cap armed ${ListenTiming.LISTEN_CAP_MS}")
+        val runnable = Runnable {
+            listenCap = null
+            if (token != generation || settled) return@Runnable
+            val text = lastPartial.trim()
+            SessionTrace.log("listen", "cap fired partial=$text")
+            val listener = callbackListener
+            val component = callbackComponent
+            if (listener == null) return@Runnable
+            if (component == null) {
+                settled = true
+                active = false
+                if (text.isNotEmpty()) listener.onFinal(text) else listener.onFailure(ListenFailure.TIMEOUT)
+                return@Runnable
+            }
+            if (ListenTiming.shouldPromote(text, stableMs = 0, endOfSpeech = false, timedOut = true)) {
+                finishAttempt(component, callbackIndex, listener, token, text, null)
+            } else {
+                finishAttempt(component, callbackIndex, listener, token, null, SpeechRecognizer.ERROR_SPEECH_TIMEOUT)
+            }
+        }
+        listenCap = runnable
+        main.postDelayed(runnable, ListenTiming.LISTEN_CAP_MS)
+    }
+
+    private fun schedulePromote(token: Int, delayMs: Long, endOfSpeech: Boolean) {
+        cancelPromote()
+        val runnable = Runnable {
+            pendingPromote = null
+            if (token != generation || settled) return@Runnable
+            val text = lastPartial.trim()
+            if (!ListenTiming.shouldPromote(text, delayMs, endOfSpeech, timedOut = false)) return@Runnable
+            val listener = callbackListener ?: return@Runnable
+            val component = callbackComponent ?: return@Runnable
+            SessionTrace.log("listen", "promote end=$endOfSpeech $text")
+            finishAttempt(component, callbackIndex, listener, token, text, null)
+        }
+        pendingPromote = runnable
+        main.postDelayed(runnable, delayMs)
+    }
+
+    private fun cancelPromote() {
+        pendingPromote?.let { main.removeCallbacks(it) }
+        pendingPromote = null
+    }
+
+    private fun cancelListenCap() {
+        listenCap?.let { main.removeCallbacks(it) }
+        listenCap = null
     }
 
     /**

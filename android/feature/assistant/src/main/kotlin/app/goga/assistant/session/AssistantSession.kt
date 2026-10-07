@@ -29,6 +29,8 @@ enum class SpeechMode {
 }
 
 interface SpeechListener {
+    fun onReady() {}
+
     fun onPartial(text: String)
 
     fun onFinal(text: String)

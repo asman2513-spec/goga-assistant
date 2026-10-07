@@ -23,7 +23,7 @@ class AssistantActivity : ComponentActivity() {
         setContent {
             val host = remember {
                 OverlayHost(shown = true).apply {
-                    launch = { intent -> launchFromActivity(intent) }
+                    launch = { intents -> launchFromActivity(intents) }
                 }
             }
             AssistantOverlay(
@@ -34,16 +34,23 @@ class AssistantActivity : ComponentActivity() {
         }
     }
 
-    private fun launchFromActivity(intent: android.content.Intent): Boolean {
-        SessionTrace.log("act", "activity ${intent.action}")
-        return try {
-            startActivity(intent)
-            true
-        } catch (error: Exception) {
-            Log.w(TAG, "activity launch failed", error)
-            SessionTrace.log("act", error)
-            false
+    private fun launchFromActivity(intents: List<android.content.Intent>): Boolean {
+        if (intents.isEmpty()) return false
+        var opened = false
+        for (intent in intents) {
+            val copy = android.content.Intent(intent).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            try {
+                startActivity(copy)
+                SessionTrace.log("act", "activity started ${copy.action}")
+                opened = true
+                break
+            } catch (error: Exception) {
+                Log.w(TAG, "activity launch failed", error)
+                SessionTrace.log("act", error)
+            }
         }
+        window.decorView.post { app.goga.assistant.session.LaunchRelay.deliver(opened) }
+        return true
     }
 
     private fun launchMicPrompt() {

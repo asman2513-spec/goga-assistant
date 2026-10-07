@@ -64,6 +64,7 @@ sealed interface PhoneFollowUp {
     data class NeedSmsBody(val choice: ContactChoice) : PhoneFollowUp
     data class ConfirmSms(val choice: ContactChoice, val body: String) : PhoneFollowUp
     data class PickSms(val options: List<ContactChoice>, val body: String?) : PhoneFollowUp
+    data class ConfirmCall(val choice: ContactChoice) : PhoneFollowUp
     data object NeedOpenTarget : PhoneFollowUp
 }
 
@@ -83,6 +84,9 @@ interface PhoneGateway {
     fun pickCall(query: String, options: List<ContactChoice>): PhoneOutcome
 
     fun continueSms(choice: ContactChoice, body: String?): PhoneOutcome
+
+    /** Fuzzy or cut-off call, asked back instead of dialing. Null when it is not a call. */
+    fun suggestCall(phrase: String): PhoneOutcome? = null
 }
 
 /** Plans the spoken step without touching the phone. The overlay uses [AndroidPhoneGateway]. */
@@ -212,6 +216,43 @@ fun isPhoneNumber(text: String): Boolean {
     val extra = text.any { !it.isDigit() && !it.isWhitespace() && it != '+' }
     return digits >= 3 && !extra
 }
+
+fun usableActivityClass(packageName: String, className: String?): String? {
+    val name = className?.trim().orEmpty()
+    if (name.isEmpty() || name == packageName) return null
+    return name
+}
+
+fun repairCallPhrase(raw: String): String? {
+    val words = phraseNormalize(raw).split(" ").filter { it.isNotBlank() }
+    val hit = words.indexOfFirst { it in CALL_STUBS }
+    if (hit < 0) return null
+    val rest = words.filterIndexed { index, _ -> index != hit }.joinToString(" ")
+    return if (rest.isBlank()) "позвони" else "позвони $rest"
+}
+
+/** Name to look up when the phrase was not a clean command. */
+fun fuzzyCallTarget(raw: String): String? {
+    val repaired = repairCallPhrase(raw)
+    if (repaired != null) {
+        return phraseNormalize(repaired).removePrefix("позвони").trim().ifBlank { null }
+    }
+    val words = phraseNormalize(raw).split(" ").filter { it.length >= 3 }
+    if (words.size !in 1..3) return null
+    return words.last()
+}
+
+fun dativeName(name: String): String {
+    val trimmed = name.trim()
+    if (trimmed.isEmpty() || trimmed.any { it.isWhitespace() }) return trimmed
+    val lower = trimmed.lowercase(Locale.forLanguageTag("ru"))
+    return when {
+        lower.endsWith("а") || lower.endsWith("я") -> trimmed.dropLast(1) + "е"
+        else -> trimmed
+    }
+}
+
+fun callConfirmLine(name: String): String = "Позвонить ${dativeName(name)}?"
 
 fun stemName(query: String): String {
     val endings = listOf("ами", "ями", "ого", "ему", "ому", "ой", "ей", "ах", "ях", "ом", "ем", "у", "ю", "е", "и", "ы", "а", "я")
@@ -486,6 +527,7 @@ internal fun clockLabel(hour: Int, minute: Int): String =
 private val LEAD_IN = setOf("гога", "пожалуйста", "слушай", "скажи")
 private val FILLERS = setOf("мне", "пожалуйста", "номер", "на", "для")
 private val CALL_VERBS = setOf("набери", "набрать", "наберите", "наберу", "наберем", "звонок", "звонки")
+private val CALL_STUBS = setOf("они", "вони", "звони", "позво", "пазвони", "пазвон", "звни")
 private val SPOKEN_NUMBERS = mapOf(
     "один" to 1, "одну" to 1, "два" to 2, "две" to 2, "три" to 3, "четыре" to 4, "пять" to 5,
     "шесть" to 6, "семь" to 7, "восемь" to 8, "девять" to 9, "десять" to 10, "пятнадцать" to 15,

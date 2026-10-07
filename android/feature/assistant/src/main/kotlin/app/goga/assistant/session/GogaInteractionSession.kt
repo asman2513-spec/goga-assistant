@@ -67,7 +67,7 @@ class GogaInteractionSession(context: Context) : VoiceInteractionSession(
 
     override fun onCreate() {
         super.onCreate()
-        host.launch = { intent -> launchFromSession(intent) }
+        host.launch = { intents -> launchFromSession(intents) }
         Log.i(TAG, "session create")
         SessionTrace.log("session", "create")
         prepareWindow()
@@ -125,14 +125,29 @@ class GogaInteractionSession(context: Context) : VoiceInteractionSession(
         return root
     }
 
-    private fun launchFromSession(intent: Intent): Boolean {
-        SessionTrace.log("act", "session ${intent.action} ${intent.component}")
+    /**
+     * Foreign activities are not started with startVoiceActivity: that API only
+     * resolves CATEGORY_VOICE and rejects the dialer and the camera. The trampoline
+     * is our activity, so startAssistantActivity is allowed, and it calls startActivity.
+     */
+    private fun launchFromSession(intents: List<Intent>): Boolean {
+        if (intents.isEmpty()) return false
+        val path = routeLaunch(intents.map { it.component?.packageName }, ownPackage)
+        SessionTrace.log("act", "route $path ${intents.joinToString { it.action ?: "-" }}")
         return try {
-            if (intent.component?.packageName == ownPackage) startAssistantActivity(intent)
-            else startVoiceActivity(intent)
+            if (path == LaunchPath.ASSISTANT) {
+                startAssistantActivity(intents.first())
+                main.post { LaunchRelay.deliver(true) }
+            } else {
+                val handoff = Intent().setClassName(ownPackage, LaunchHandoff.ACTIVITY).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    putParcelableArrayListExtra(LaunchHandoff.EXTRA_TARGETS, ArrayList(intents))
+                }
+                startAssistantActivity(handoff)
+            }
             true
         } catch (error: Exception) {
-            Log.w(TAG, "voice activity failed", error)
+            Log.w(TAG, "assistant activity failed", error)
             SessionTrace.log("act", error)
             false
         }

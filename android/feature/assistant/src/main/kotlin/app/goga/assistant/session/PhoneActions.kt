@@ -111,17 +111,55 @@ class AndroidPhoneGateway(
         return dial(chosen, directPreferred = true)
     }
 
-    fun performLaunch(launch: PhoneLaunch, start: (Intent) -> Boolean): Boolean {
+    override fun suggestCall(phrase: String): PhoneOutcome? {
+        val repaired = repairCallPhrase(phrase)
+        val target = fuzzyCallTarget(phrase) ?: return null
+        if (!granted(Manifest.permission.READ_CONTACTS)) {
+            return if (repaired != null) denied("контакты") else null
+        }
+        val found = lookup(target)
+        if (found.isEmpty()) {
+            return if (repaired != null) {
+                PhoneOutcome("Кому позвонить?", "call", asksConfirmation = true, followUp = PhoneFollowUp.NeedCallTarget)
+            } else {
+                null
+            }
+        }
+        val key = phraseNormalize(target)
+        val stem = stemName(key)
+        val best = found.first()
+        val score = contactScore(key, stem, phraseNormalize(best.name))
+        if (score < if (repaired != null) 40 else 60) return null
+        if (found.size > 1) {
+            val secondScore = contactScore(key, stem, phraseNormalize(found[1].name))
+            if (secondScore >= score - 20) {
+                return PhoneOutcome(choiceLine(found), "call", asksConfirmation = true, followUp = PhoneFollowUp.PickCall(found))
+            }
+        }
+        return PhoneOutcome(
+            callConfirmLine(best.name),
+            "call",
+            asksConfirmation = true,
+            followUp = PhoneFollowUp.ConfirmCall(best),
+        )
+    }
+
+    fun performLaunch(launch: PhoneLaunch, start: (List<Intent>) -> Boolean): Boolean {
         if (launch is PhoneLaunch.Permissions) {
             SessionTrace.log("act", "permission stays in the app")
             return false
         }
-        Log.i(TAG, "launch $launch")
-        SessionTrace.log("act", "launch $launch")
-        val intent = intentFor(launch) ?: return false
-        if (tryStart(start, intent)) return true
-        val fallback = fallbackIntent(launch) ?: return false
-        return tryStart(start, fallback)
+        val intents = candidateIntents(launch)
+        Log.i(TAG, "launch $launch candidates=${intents.size}")
+        SessionTrace.log("act", "launch $launch candidates=${intents.size}")
+        if (intents.isEmpty()) return false
+        return try {
+            start(intents)
+        } catch (error: Exception) {
+            Log.w(TAG, "launch failed", error)
+            SessionTrace.log("act", error)
+            false
+        }
     }
 
     private fun call(target: String): PhoneOutcome {
@@ -210,7 +248,7 @@ class AndroidPhoneGateway(
             return PhoneOutcome(
                 "Открываю $name.",
                 "open-app",
-                launch = PhoneLaunch.OpenPackage(pkg, component?.className),
+                launch = PhoneLaunch.OpenPackage(pkg, usableActivityClass(pkg, component?.className)),
             )
         }
         val labels = launcherLabels()
@@ -220,7 +258,7 @@ class AndroidPhoneGateway(
             return PhoneOutcome(
                 "Открываю ${match.first}.",
                 "open-app",
-                launch = PhoneLaunch.OpenPackage(match.second, match.third),
+                launch = PhoneLaunch.OpenPackage(match.second, usableActivityClass(match.second, match.third)),
             )
         }
         if (key.contains("камер")) {
@@ -414,10 +452,20 @@ class AndroidPhoneGateway(
 
     private fun openPackageIntent(launch: PhoneLaunch.OpenPackage): Intent? {
         app.packageManager.getLaunchIntentForPackage(launch.packageName)?.newTask()?.let { return it }
-        val className = launch.className ?: return null
+        val className = usableActivityClass(launch.packageName, launch.className) ?: return null
         return Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
             .setClassName(launch.packageName, className)
             .newTask()
+    }
+
+    private fun candidateIntents(launch: PhoneLaunch): List<Intent> {
+        val seen = LinkedHashSet<String>()
+        val out = ArrayList<Intent>()
+        for (intent in listOfNotNull(intentFor(launch)) + fallbackIntents(launch)) {
+            val key = "${intent.action}|${intent.dataString}|${intent.component?.className}"
+            if (seen.add(key)) out += intent
+        }
+        return out
     }
 
     private fun clockIntent(launch: PhoneLaunch.Clock): Intent = if (launch.timerSeconds != null) {
@@ -441,29 +489,29 @@ class AndroidPhoneGateway(
         SettingsTarget.General -> Settings.ACTION_SETTINGS
     }
 
-    private fun tryStart(start: (Intent) -> Boolean, intent: Intent): Boolean = try {
-        start(intent)
-    } catch (error: Exception) {
-        Log.w(TAG, "launch failed ${intent.action}", error)
-        SessionTrace.log("act", error)
-        false
-    }
-
-    private fun fallbackIntent(launch: PhoneLaunch): Intent? = when (launch) {
+    private fun fallbackIntents(launch: PhoneLaunch): List<Intent> = when (launch) {
         is PhoneLaunch.Tel -> if (launch.direct) {
-            Intent(Intent.ACTION_DIAL, Uri.parse("tel:${launch.number}")).newTask()
+            listOf(Intent(Intent.ACTION_DIAL, Uri.parse("tel:${launch.number}")).newTask())
         } else {
-            null
+            emptyList()
+        }
+        is PhoneLaunch.OpenPackage -> if (launch.packageName.contains("camera")) {
+            listOf(
+                Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA).newTask(),
+                Intent(MediaStore.ACTION_IMAGE_CAPTURE).newTask(),
+            )
+        } else {
+            emptyList()
         }
         is PhoneLaunch.ViewAction -> when (launch.action) {
-            Settings.Panel.ACTION_WIFI -> Intent(Settings.ACTION_WIFI_SETTINGS).newTask()
-            PANEL_BLUETOOTH -> Intent(Settings.ACTION_BLUETOOTH_SETTINGS).newTask()
+            Settings.Panel.ACTION_WIFI -> listOf(Intent(Settings.ACTION_WIFI_SETTINGS).newTask())
+            PANEL_BLUETOOTH -> listOf(Intent(Settings.ACTION_BLUETOOTH_SETTINGS).newTask())
             MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA ->
-                Intent(MediaStore.ACTION_IMAGE_CAPTURE).newTask()
-            else -> null
+                listOf(Intent(MediaStore.ACTION_IMAGE_CAPTURE).newTask())
+            else -> emptyList()
         }
-        is PhoneLaunch.Clock -> Intent(AlarmClock.ACTION_SHOW_ALARMS).newTask()
-        else -> null
+        is PhoneLaunch.Clock -> listOf(Intent(AlarmClock.ACTION_SHOW_ALARMS).newTask())
+        else -> emptyList()
     }
 
     private fun Intent.newTask(): Intent = addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)

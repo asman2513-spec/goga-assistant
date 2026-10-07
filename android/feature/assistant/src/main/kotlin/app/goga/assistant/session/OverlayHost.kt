@@ -11,7 +11,7 @@ import androidx.compose.runtime.mutableStateOf
 class OverlayHost(shown: Boolean) {
     val showToken = mutableIntStateOf(if (shown) 1 else 0)
     val hidden = mutableStateOf(!shown)
-    var launch: (Intent) -> Boolean = { false }
+    var launch: (List<Intent>) -> Boolean = { false }
 
     fun noteShow() {
         hidden.value = false

@@ -37,6 +37,8 @@ sealed interface PipeIn {
 
     data object ArmListen : PipeIn
 
+    data object EarReady : PipeIn
+
     data object Pause : PipeIn
 
     data class Partial(val text: String) : PipeIn
@@ -85,7 +87,12 @@ fun reducePipe(state: PipeState, event: PipeIn): PipeState = try {
             status = "Скрыто",
         )
         PipeIn.ArmListen -> if (state.phase == PipePhase.Idle) {
-            state.copy(phase = PipePhase.Listening, partial = "", status = "Слушаю")
+            state.copy(phase = PipePhase.Listening, partial = "", status = "Готовлюсь")
+        } else {
+            state
+        }
+        PipeIn.EarReady -> if (state.phase == PipePhase.Listening) {
+            state.copy(status = "Слушаю")
         } else {
             state
         }
@@ -95,40 +102,20 @@ fun reducePipe(state: PipeState, event: PipeIn): PipeState = try {
             state
         }
         is PipeIn.Partial -> if (state.phase == PipePhase.Listening) {
-            state.copy(partial = event.text, status = "Слушаю")
+            state.copy(partial = event.text)
         } else {
             state
         }
         is PipeIn.Heard -> if (state.phase == PipePhase.Close) {
             state
         } else {
-            state.copy(
-                phase = PipePhase.Thinking,
-                generation = state.generation + 1,
-                turn = state.turn + 1,
-                partial = "",
-                lastUser = event.text.trim(),
-                source = event.source,
-                reply = "",
-                launch = null,
-                asks = false,
-                failedListens = 0,
-                preferText = false,
-                status = "Думаю",
-            )
+            hear(state, event.text, event.source)
         }
-        is PipeIn.Missed, PipeIn.ListenTimeout -> if (state.phase == PipePhase.Listening) {
-            val failed = state.failedListens + 1
-            val prefer = failed >= 2
-            state.copy(
-                phase = PipePhase.Idle,
-                partial = "",
-                failedListens = failed,
-                preferText = prefer,
-                status = if (prefer) "Давайте текстом." else "Не расслышал.",
-            )
+        is PipeIn.Missed -> miss(state)
+        PipeIn.ListenTimeout -> if (state.phase == PipePhase.Listening && state.partial.isNotBlank()) {
+            hear(state, state.partial, "voice")
         } else {
-            state
+            miss(state)
         }
         is PipeIn.Thought -> if (state.phase != PipePhase.Thinking) {
             state
@@ -185,10 +172,10 @@ fun reducePipe(state: PipeState, event: PipeIn): PipeState = try {
         } else if (event.ok && state.launch?.leavesSession == true) {
             state.copy(phase = PipePhase.Close, launch = null, status = "Закрываю")
         } else {
-            speakLine(state, "Не получилось открыть.", "act-failed")
+            speakLine(state, actFailureReply(state.intent, state.launch, state.reply), "act-failed")
         }
         PipeIn.ActTimeout -> if (state.phase == PipePhase.Acting) {
-            speakLine(state, "Не получилось открыть.", "timeout")
+            speakLine(state, actFailureReply(state.intent, state.launch, state.reply), "timeout")
         } else {
             state
         }
@@ -196,6 +183,53 @@ fun reducePipe(state: PipeState, event: PipeIn): PipeState = try {
     }
 } catch (error: RuntimeException) {
     speakLine(state, "Сбой. Слушаю снова.", "fault")
+}
+
+private fun hear(state: PipeState, text: String, source: String): PipeState = state.copy(
+    phase = PipePhase.Thinking,
+    generation = state.generation + 1,
+    turn = state.turn + 1,
+    partial = "",
+    lastUser = text.trim(),
+    source = source,
+    reply = "",
+    launch = null,
+    asks = false,
+    failedListens = 0,
+    preferText = false,
+    status = "Думаю",
+)
+
+private fun miss(state: PipeState): PipeState = if (state.phase == PipePhase.Listening) {
+    val failed = state.failedListens + 1
+    val prefer = failed >= 2
+    state.copy(
+        phase = PipePhase.Idle,
+        partial = "",
+        failedListens = failed,
+        preferText = prefer,
+        status = if (prefer) "Давайте текстом." else "Не расслышал.",
+    )
+} else {
+    state
+}
+
+fun actFailureReply(intent: String, launch: PhoneLaunch?, reply: String = ""): String {
+    val camera = reply.contains("камер") ||
+        (launch is PhoneLaunch.OpenPackage && launch.packageName.contains("camera")) ||
+        (launch is PhoneLaunch.ViewAction && (
+            launch.action.contains("STILL_IMAGE_CAMERA") || launch.action.contains("IMAGE_CAPTURE")
+            ))
+    return when {
+        intent == "call" || launch is PhoneLaunch.Tel -> "Не получилось позвонить."
+        camera -> "Не получилось открыть камеру."
+        intent == "sms" || launch is PhoneLaunch.SmsCompose -> "Не получилось открыть сообщение."
+        intent == "settings" || launch is PhoneLaunch.OpenSettings -> "Не получилось открыть настройки."
+        intent == "alarm" || intent == "timer" || launch is PhoneLaunch.Clock -> "Не получилось поставить."
+        intent == "wireless" && reply.contains("блютуз") -> "Не получилось открыть блютуз."
+        intent == "wireless" -> "Не получилось открыть вайфай."
+        else -> "Не получилось открыть."
+    }
 }
 
 private fun speakLine(state: PipeState, reply: String, intent: String): PipeState = state.copy(
