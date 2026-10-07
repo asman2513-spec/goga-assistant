@@ -152,12 +152,58 @@ class LocalDialogEngine(
         )
         val TIME_PHRASES = setOf(
             "который час",
+            "который сейчас час",
+            "который час сейчас",
+            "сейчас который час",
             "сколько времени",
             "сколько сейчас времени",
-            "который сейчас час",
+            "сколько время",
+            "сколько сейчас время",
+            "сколько время сейчас",
+            "скока время",
+            "скока времени",
+            "сколька время",
+            "сколька времени",
             "какое время",
+            "какое сейчас время",
             "время",
+            "время сейчас",
+            "сейчас время",
+            "текущее время",
             "подскажи время",
+            "которий час",
+            "каторый час",
+        )
+        val WHICH = setOf("который", "которий", "каторый", "которы")
+        val HOUR = setOf("час", "часа", "часу", "часом")
+        val HOW_MUCH = setOf("сколько", "скока", "сколька", "скольки", "сколко", "склько", "скок")
+        val TIME_WORD = setOf(
+            "время",
+            "времени",
+            "времи",
+            "време",
+            "временя",
+            "времяни",
+            "времини",
+        )
+        val TIME_FILLER = setOf(
+            "сейчас",
+            "щас",
+            "ща",
+            "мне",
+            "пожалуйста",
+            "ну",
+            "а",
+            "и",
+            "на",
+            "часах",
+            "подскажи",
+            "скажи",
+            "гога",
+            "какое",
+            "какая",
+            "текущее",
+            "точное",
         )
         val DATE_PHRASES = setOf(
             "какая сегодня дата",
@@ -199,15 +245,32 @@ class LocalDialogEngine(
             .replace(Regex("\\s+"), " ")
             .trim()
 
-        fun knownIntent(key: String): String? = when (key) {
-            in GREETINGS -> "greeting"
-            in TIME_PHRASES -> "time"
-            in DATE_PHRASES -> "date"
-            in HELP_PHRASES -> "help"
-            in THANKS -> "thanks"
-            in YES_WORDS -> "yes"
-            in NO_WORDS -> "no"
+        fun knownIntent(key: String): String? = when {
+            key in GREETINGS -> "greeting"
+            isTimeAsk(key) -> "time"
+            key in DATE_PHRASES -> "date"
+            key in HELP_PHRASES -> "help"
+            key in THANKS -> "thanks"
+            key in YES_WORDS -> "yes"
+            key in NO_WORDS -> "no"
             else -> containedIntent(key)
+        }
+
+        /** Clock questions, including the spoken form «сколько время» and STT slips. */
+        fun isTimeAsk(key: String): Boolean {
+            if (key in TIME_PHRASES) return true
+            val words = key.split(" ").filter { it.isNotEmpty() }
+            if (words.isEmpty()) return false
+            val hasWhich = words.any { it in WHICH }
+            val hasHour = words.any { it in HOUR }
+            if (hasWhich && hasHour) return true
+            val hasMuch = words.any { it in HOW_MUCH }
+            val hasTime = words.any { it in TIME_WORD }
+            if (hasMuch && hasTime) return true
+            val content = words.filterNot { it in TIME_FILLER }
+            return content.isNotEmpty() &&
+                content.all { it in TIME_WORD || it in HOW_MUCH || it in WHICH || it in HOUR } &&
+                content.any { it in TIME_WORD }
         }
 
         fun containedIntent(key: String): String? {

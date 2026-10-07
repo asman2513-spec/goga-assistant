@@ -19,6 +19,8 @@ class SystemSpeechOutput(
     private var generation = 0
     private var pendingText: String? = null
     private var pendingDone: (() -> Unit)? = null
+    private var deliveredToken = -1
+    private var timeout: Runnable? = null
 
     var russianVoice: Boolean? = null
         private set
@@ -82,6 +84,15 @@ class SystemSpeechOutput(
             }
         })
         val queued = current.speak(text, TextToSpeech.QUEUE_FLUSH, null, utterance)
+        val timeoutMs = (text.length * 120L + 2_500L).coerceAtMost(15_000L)
+        val watchdog = Runnable {
+            if (token == generation) {
+                Log.w(TAG, "speak timeout")
+                finish(token, onDone)
+            }
+        }
+        timeout = watchdog
+        main.postDelayed(watchdog, timeoutMs)
         if (queued == TextToSpeech.ERROR) {
             Log.w(TAG, "speak rejected")
             finish(token, onDone)
@@ -92,6 +103,7 @@ class SystemSpeechOutput(
         generation++
         pendingText = null
         pendingDone = null
+        cancelTimeout()
         engine?.stop()
     }
 
@@ -100,6 +112,7 @@ class SystemSpeechOutput(
         pendingText = null
         pendingDone = null
         onReady = null
+        cancelTimeout()
         engine?.stop()
         engine?.shutdown()
         engine = null
@@ -107,11 +120,18 @@ class SystemSpeechOutput(
     }
 
     private fun finish(token: Int, onDone: () -> Unit) {
-        if (token != generation) return
+        if (token != generation || token == deliveredToken) return
+        deliveredToken = token
+        cancelTimeout()
         Log.i(TAG, "speak finished")
         main.post {
             if (token == generation) onDone()
         }
+    }
+
+    private fun cancelTimeout() {
+        timeout?.let { main.removeCallbacks(it) }
+        timeout = null
     }
 
     private companion object {

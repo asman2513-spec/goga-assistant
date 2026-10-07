@@ -6,8 +6,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
-import android.os.Handler
-import android.os.Looper
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -78,7 +76,6 @@ fun AssistantOverlay(
     }
     val speech = remember { DeviceSpeechInput(context) }
     val speaker = remember { SystemSpeechOutput(context) }
-    val main = remember { Handler(Looper.getMainLooper()) }
     var micGranted by remember { mutableStateOf(hasMic(context)) }
     var askedForMic by remember { mutableStateOf(false) }
     var russianVoice by remember { mutableStateOf<Boolean?>(null) }
@@ -126,7 +123,7 @@ fun AssistantOverlay(
     fun closeOverlay() {
         speech.release()
         speaker.stop()
-        main.post { onClose() }
+        onClose()
     }
 
     fun startListening() {

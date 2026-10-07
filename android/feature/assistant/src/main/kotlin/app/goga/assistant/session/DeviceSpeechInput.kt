@@ -21,8 +21,9 @@ import android.util.Log
  * [GogaRecognitionService] once Goga is the default assistant. That stub does not
  * hear the user. Text input does not use this class.
  *
- * Terminal callbacks only record state and post work. Calling cancel, destroy, or
- * startListening on the recognizer thread deadlocks MagicOS and freezes the session.
+ * Terminal callbacks only record state and post work. After a result the same
+ * recognizer is started again later: cancel() plus a new instance deadlocks MagicOS
+ * once TTS asks the microphone back.
  */
 class DeviceSpeechInput(
     context: Context,
@@ -35,11 +36,18 @@ class DeviceSpeechInput(
         ownPackage = appContext.packageName,
     )
     private var recognizer: SpeechRecognizer? = null
+    private var boundComponent: ComponentName? = null
     private var active = false
     private var settled = false
+    private var heardSession = false
     private var generation = 0
+    private var retries = 0
     private var lastPartial: String = ""
     private var pendingMiss: Runnable? = null
+    private var pendingStart: Runnable? = null
+    private var callbackListener: SpeechListener? = null
+    private var callbackIndex: Int = 0
+    private var callbackComponent: ComponentName? = null
 
     override val mode: SpeechMode = when {
         order.isEmpty() -> SpeechMode.UNAVAILABLE
@@ -53,10 +61,12 @@ class DeviceSpeechInput(
             deliver { listener.onFailure(ListenFailure.UNAVAILABLE) }
             return
         }
-        val token = beginAttempt()
-        main.post {
-            if (token == generation) listenAt(0, listener, token)
+        if (active && !settled) {
+            Log.i(TAG, "start ignored, session still open")
+            return
         }
+        val token = beginAttempt()
+        scheduleListen(0, listener, token, if (heardSession) RESTART_GAP_MS else 0L)
     }
 
     override fun stop() {
@@ -70,14 +80,13 @@ class DeviceSpeechInput(
     }
 
     private fun beginAttempt(): Int {
-        val previous = recognizer
         generation++
         active = true
         settled = false
+        retries = 0
         lastPartial = ""
-        recognizer = null
         cancelPendingMiss()
-        quietDestroy(previous)
+        cancelScheduledListen()
         return generation
     }
 
@@ -86,10 +95,32 @@ class DeviceSpeechInput(
         generation++
         active = false
         settled = true
+        retries = 0
         lastPartial = ""
         recognizer = null
+        boundComponent = null
+        callbackListener = null
+        callbackComponent = null
         cancelPendingMiss()
+        cancelScheduledListen()
         quietDestroy(previous)
+    }
+
+    private fun scheduleListen(index: Int, listener: SpeechListener, token: Int, delayMs: Long) {
+        cancelScheduledListen()
+        Log.i(TAG, "listen scheduled delay=$delayMs attempt=$index")
+        val runnable = Runnable {
+            pendingStart = null
+            if (token != generation || !active || settled) return@Runnable
+            listenAt(index, listener, token)
+        }
+        pendingStart = runnable
+        if (delayMs <= 0L) main.post(runnable) else main.postDelayed(runnable, delayMs)
+    }
+
+    private fun cancelScheduledListen() {
+        pendingStart?.let { main.removeCallbacks(it) }
+        pendingStart = null
     }
 
     private fun listenAt(index: Int, listener: SpeechListener, token: Int) {
@@ -102,24 +133,57 @@ class DeviceSpeechInput(
             return
         }
         val component = ComponentName(candidate.packageName, candidate.className)
+        val existing = recognizer
+        if (existing != null && boundComponent == component) {
+            Log.i(TAG, "reuse ${component.flattenToShortString()} attempt=$index")
+            armCallbacks(component, index, listener)
+            try {
+                heardSession = true
+                existing.startListening(recognizeIntent())
+            } catch (error: RuntimeException) {
+                Log.w(TAG, "reuse startListening threw", error)
+                recognizer = null
+                boundComponent = null
+                quietDestroy(existing)
+                if (index + 1 < order.size) {
+                    scheduleListen(index + 1, listener, token, RESTART_GAP_MS)
+                } else {
+                    settled = true
+                    active = false
+                    deliver { listener.onFailure(ListenFailure.UNKNOWN) }
+                }
+            }
+            return
+        }
+        if (existing != null) {
+            recognizer = null
+            boundComponent = null
+            quietDestroy(existing)
+            scheduleListen(index, listener, token, RESTART_GAP_MS)
+            return
+        }
         Log.i(TAG, "start ${component.flattenToShortString()} attempt=$index")
         val created = try {
             SpeechRecognizer.createSpeechRecognizer(appContext, component)
         } catch (error: RuntimeException) {
             Log.w(TAG, "create failed ${component.flattenToShortString()}", error)
-            main.post { listenAt(index + 1, listener, token) }
+            scheduleListen(index + 1, listener, token, RESTART_GAP_MS)
             return
         }
         recognizer = created
-        created.setRecognitionListener(listenerFor(component, index, listener, token))
+        boundComponent = component
+        armCallbacks(component, index, listener)
+        created.setRecognitionListener(callbacks)
         try {
+            heardSession = true
             created.startListening(recognizeIntent())
         } catch (error: RuntimeException) {
             Log.w(TAG, "startListening threw ${component.flattenToShortString()}", error)
             recognizer = null
+            boundComponent = null
             quietDestroy(created)
             if (index + 1 < order.size) {
-                main.post { listenAt(index + 1, listener, token) }
+                scheduleListen(index + 1, listener, token, RESTART_GAP_MS)
             } else {
                 settled = true
                 active = false
@@ -128,14 +192,15 @@ class DeviceSpeechInput(
         }
     }
 
-    private fun listenerFor(
-        component: ComponentName,
-        index: Int,
-        listener: SpeechListener,
-        token: Int,
-    ) = object : RecognitionListener {
+    private fun armCallbacks(component: ComponentName, index: Int, listener: SpeechListener) {
+        callbackComponent = component
+        callbackIndex = index
+        callbackListener = listener
+    }
+
+    private val callbacks = object : RecognitionListener {
         override fun onReadyForSpeech(params: Bundle?) {
-            Log.i(TAG, "ready ${component.flattenToShortString()}")
+            Log.i(TAG, "ready ${callbackComponent?.flattenToShortString()}")
         }
 
         override fun onBeginningOfSpeech() = Unit
@@ -147,6 +212,10 @@ class DeviceSpeechInput(
         override fun onEndOfSpeech() = Unit
 
         override fun onError(error: Int) {
+            val token = generation
+            val listener = callbackListener ?: return
+            val component = callbackComponent ?: return
+            val index = callbackIndex
             main.post {
                 if (token != generation || settled) return@post
                 Log.w(
@@ -159,6 +228,10 @@ class DeviceSpeechInput(
 
         override fun onResults(results: Bundle?) {
             val text = results.bestText()
+            val token = generation
+            val listener = callbackListener ?: return
+            val component = callbackComponent ?: return
+            val index = callbackIndex
             main.post {
                 if (token != generation || settled) return@post
                 Log.i(TAG, "final raw=${text.orEmpty()} partial=$lastPartial")
@@ -168,6 +241,8 @@ class DeviceSpeechInput(
 
         override fun onPartialResults(partialResults: Bundle?) {
             val text = partialResults.bestText() ?: return
+            val token = generation
+            val listener = callbackListener ?: return
             main.post {
                 if (token != generation || settled) return@post
                 lastPartial = text
@@ -178,6 +253,8 @@ class DeviceSpeechInput(
 
         override fun onSegmentResults(segmentResults: Bundle) {
             val text = segmentResults.bestText() ?: return
+            val token = generation
+            val listener = callbackListener ?: return
             main.post {
                 if (token != generation || settled) return@post
                 lastPartial = text
@@ -187,6 +264,10 @@ class DeviceSpeechInput(
         }
 
         override fun onEndOfSegmentedSession() {
+            val token = generation
+            val listener = callbackListener ?: return
+            val component = callbackComponent ?: return
+            val index = callbackIndex
             main.post {
                 if (token != generation || settled) return@post
                 Log.i(TAG, "segment end partial=$lastPartial")
@@ -244,28 +325,37 @@ class DeviceSpeechInput(
         error: Int?,
     ) {
         if (token != generation || settled) return
-        settled = true
-        active = false
         val transcript = resolveTranscript(finalText, lastPartial)
-        val captured = recognizer
-        recognizer = null
         val errorLabel = error?.let { "$it ${errorName(it)}" } ?: "-"
         Log.i(
             TAG,
             "settle raw=${finalText.orEmpty()} partial=$lastPartial transcript=${transcript.orEmpty()} error=$errorLabel",
         )
+        if (transcript == null && error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY && retries < MAX_BUSY_RETRIES) {
+            retries++
+            settled = false
+            active = true
+            lastPartial = ""
+            Log.w(TAG, "busy retry=$retries")
+            scheduleListen(index, listener, token, RESTART_GAP_MS)
+            return
+        }
+        settled = true
+        active = false
         if (transcript == null && error != null && shouldTryNext(error) && index + 1 < order.size) {
+            val captured = recognizer
+            recognizer = null
+            boundComponent = null
             quietDestroy(captured)
-            main.post {
-                if (token != generation) return@post
+            main.postDelayed({
+                if (token != generation) return@postDelayed
                 settled = false
                 active = true
                 lastPartial = ""
                 listenAt(index + 1, listener, token)
-            }
+            }, RESTART_GAP_MS)
             return
         }
-        quietDestroy(captured)
         main.post {
             if (token != generation) return@post
             if (!transcript.isNullOrBlank()) {
@@ -282,15 +372,13 @@ class DeviceSpeechInput(
         pendingMiss = null
     }
 
-    /** Posted so the recognizer callback has already returned. Never call inline. */
+    /**
+     * Drops the client without [SpeechRecognizer.cancel]. On MagicOS cancel()
+     * from the main thread waits for a callback that needs that same thread.
+     */
     private fun quietDestroy(instance: SpeechRecognizer?) {
         if (instance == null) return
         main.post {
-            try {
-                instance.cancel()
-            } catch (error: RuntimeException) {
-                Log.w(TAG, "cancel failed", error)
-            }
             try {
                 instance.destroy()
             } catch (error: RuntimeException) {
@@ -320,6 +408,8 @@ class DeviceSpeechInput(
         const val TAG = "Goga/Listen"
         const val LOCALE = "ru-RU"
         const val MISS_GRACE_MS = 300L
+        const val RESTART_GAP_MS = 600L
+        const val MAX_BUSY_RETRIES = 2
         val ON_DEVICE_PACKAGES = setOf(
             "com.google.android.tts",
             "com.google.android.as",

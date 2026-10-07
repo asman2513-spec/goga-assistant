@@ -24,7 +24,29 @@ class LocalDialogEngineTest {
     fun timeUsesMoscowClock() {
         val turn = engine.onUserText("который час")
         assertEquals("Сейчас 15:05.", turn.reply)
+        assertEquals("time", turn.intent)
         assertFalse(turn.asksConfirmation)
+    }
+
+    @Test
+    fun colloquialTimeTellsTheClockInsteadOfAccepting() {
+        val phrases = listOf(
+            "сколько время",
+            "Сколько время?",
+            "сколько времени",
+            "сколько сейчас время",
+            "скока время",
+            "сколька времени",
+            "который сейчас час",
+            "которий час",
+            "какое сейчас время",
+            "ну сколько время",
+        )
+        for (phrase in phrases) {
+            val turn = LocalDialogEngine { clock }.onUserText(phrase)
+            assertEquals(phrase, "time", turn.intent)
+            assertEquals(phrase, "Сейчас 15:05.", turn.reply)
+        }
     }
 
     @Test
