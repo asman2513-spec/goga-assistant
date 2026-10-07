@@ -111,10 +111,17 @@ class AndroidPhoneGateway(
         return dial(chosen, directPreferred = true)
     }
 
-    fun performLaunch(launch: PhoneLaunch): Boolean {
+    fun performLaunch(launch: PhoneLaunch, start: (Intent) -> Boolean): Boolean {
+        if (launch is PhoneLaunch.Permissions) {
+            SessionTrace.log("act", "permission stays in the app")
+            return false
+        }
         Log.i(TAG, "launch $launch")
-        if (start(intentFor(launch))) return true
-        return start(fallbackIntent(launch))
+        SessionTrace.log("act", "launch $launch")
+        val intent = intentFor(launch) ?: return false
+        if (tryStart(start, intent)) return true
+        val fallback = fallbackIntent(launch) ?: return false
+        return tryStart(start, fallback)
     }
 
     private fun call(target: String): PhoneOutcome {
@@ -126,7 +133,7 @@ class AndroidPhoneGateway(
             return dial(ContactChoice(number, number), directPreferred = true)
         }
         if (!granted(Manifest.permission.READ_CONTACTS)) {
-            return need(listOf(Manifest.permission.READ_CONTACTS, Manifest.permission.CALL_PHONE), "Нужен доступ к контактам, чтобы найти «$target».")
+            return denied("контакты")
         }
         val found = lookup(target)
         return when {
@@ -150,7 +157,7 @@ class AndroidPhoneGateway(
             return continueSms(ContactChoice(number, number), body)
         }
         if (!granted(Manifest.permission.READ_CONTACTS)) {
-            return need(listOf(Manifest.permission.READ_CONTACTS), "Нужен доступ к контактам, чтобы написать «$recipient».")
+            return denied("контакты")
         }
         val found = lookup(recipient)
         return when {
@@ -278,7 +285,7 @@ class AndroidPhoneGateway(
 
     private fun torch(enabled: Boolean?): PhoneOutcome {
         if (!granted(Manifest.permission.CAMERA)) {
-            return need(listOf(Manifest.permission.CAMERA), "Нужен доступ к камере, чтобы включить фонарик.")
+            return denied("камеру")
         }
         return try {
             val manager = app.getSystemService(CameraManager::class.java)
@@ -383,8 +390,10 @@ class AndroidPhoneGateway(
         false
     }
 
-    private fun need(permissions: List<String>, reply: String): PhoneOutcome =
-        PhoneOutcome(reply, "permission", launch = PhoneLaunch.Permissions(permissions))
+    private fun denied(what: String): PhoneOutcome = PhoneOutcome(
+        "Нет разрешения на $what. Откройте Гогу и нажмите «Выдать разрешения».",
+        "permission",
+    )
 
     private fun granted(permission: String): Boolean =
         ContextCompat.checkSelfPermission(app, permission) == PackageManager.PERMISSION_GRANTED
@@ -432,15 +441,12 @@ class AndroidPhoneGateway(
         SettingsTarget.General -> Settings.ACTION_SETTINGS
     }
 
-    private fun start(intent: Intent?): Boolean {
-        if (intent == null) return false
-        return try {
-            app.startActivity(intent)
-            true
-        } catch (error: Exception) {
-            Log.w(TAG, "launch failed ${intent.action}", error)
-            false
-        }
+    private fun tryStart(start: (Intent) -> Boolean, intent: Intent): Boolean = try {
+        start(intent)
+    } catch (error: Exception) {
+        Log.w(TAG, "launch failed ${intent.action}", error)
+        SessionTrace.log("act", error)
+        false
     }
 
     private fun fallbackIntent(launch: PhoneLaunch): Intent? = when (launch) {

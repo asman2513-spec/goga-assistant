@@ -47,6 +47,7 @@ import app.goga.assistant.ignoresBatteryOptimizations
 import app.goga.assistant.systemAssistIntent
 import app.goga.assistant.ttsSettingsIntent
 import app.goga.assistant.session.PhoneRuntimePermissions
+import app.goga.assistant.session.SessionTrace
 import app.goga.assistant.voiceInputSettings
 
 @Composable
@@ -131,6 +132,22 @@ fun SettingsScreen() {
         Button(onClick = { permissionLauncher.launch(PhoneRuntimePermissions) }) {
             Text(stringResource(R.string.settings_permissions_button))
         }
+        OutlinedButton(
+            onClick = {
+                try {
+                    context.startActivity(Intent.createChooser(SessionTrace.share(context), context.getString(R.string.settings_send_log)))
+                } catch (_: ActivityNotFoundException) {
+                    Toast.makeText(context, context.getString(R.string.settings_no_activity), Toast.LENGTH_LONG).show()
+                }
+            },
+        ) {
+            Text(stringResource(R.string.settings_send_log))
+        }
+        Text(
+            text = stringResource(R.string.settings_send_log_hint),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
 
         Text(text = stringResource(R.string.settings_voice_title), style = MaterialTheme.typography.titleLarge)
         OutlinedButton(onClick = { launch(context, context.voiceInputSettings(), noActivity) }) {

@@ -7,12 +7,14 @@
     <string name="tab_settings">Настройки</string>
     <string name="today_title">Сегодня</string>
     <string name="today_body">Здесь будут события календаря, задачи и напоминания на день.</string>
-    <string name="today_assistant">Кнопка ниже открывает сессию. После назначения помощником по умолчанию то же окно вызывается долгим нажатием питания.</string>
-    <string name="talk_button">Поговорить</string>
+    <string name="today_assistant">Кнопка «Говорить» запускает тот же помощник внутри приложения, без системной сессии. Долгое нажатие питания вызывает системную сессию, если Гога выбран помощником.</string>
+    <string name="talk_button">Говорить</string>
     <string name="settings_title">Настройки</string>
     <string name="settings_stage">Гога звонит, пишет SMS, открывает приложения, меняет громкость и фонарик, говорит заряд, ставит таймер и хранит короткие заметки на телефоне. Живой Grok Bot для этого не нужен.</string>
     <string name="settings_permissions_title">Разрешения телефона</string>
     <string name="settings_permissions_button">Выдать разрешения</string>
+    <string name="settings_send_log">Отправить журнал</string>
+    <string name="settings_send_log_hint">Последние 500 строк: фазы, фразы, действия и сбои. Файл можно переслать в Telegram или почту.</string>
     <string name="settings_permissions_ready">Микрофон, контакты, звонки, SMS и камера уже разрешены.</string>
     <string name="settings_permissions_missing">Для звонка, SMS, контактов и фонарика нужны разрешения. На Honor: Настройки → Приложения → Гога → Разрешения. Вайфай, блютуз и яркость открывают системную панель.</string>
     <string name="settings_role_held">Гога — цифровой помощник по умолчанию.</string>

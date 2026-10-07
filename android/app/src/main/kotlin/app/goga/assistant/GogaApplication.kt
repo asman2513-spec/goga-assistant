@@ -1,6 +1,7 @@
 package app.goga.assistant
 
 import android.app.Application
+import app.goga.assistant.session.SessionTrace
 import app.goga.data.local.GogaDatabase
 
 class GogaApplication : Application() {
@@ -9,6 +10,7 @@ class GogaApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        SessionTrace.install(this)
         database = GogaDatabase.create(this)
     }
 }

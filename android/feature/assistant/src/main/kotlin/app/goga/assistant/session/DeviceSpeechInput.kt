@@ -71,12 +71,29 @@ class DeviceSpeechInput(
 
     override fun stop() {
         Log.i(TAG, "stop")
-        abandon()
+        SessionTrace.log("listen", "park")
+        park()
     }
 
     override fun release() {
         Log.i(TAG, "release")
+        SessionTrace.log("listen", "release")
         abandon()
+    }
+
+    /**
+     * Drops the current listen without [SpeechRecognizer.destroy]. Destroy on the
+     * main thread deadlocks MagicOS when it races the result that just arrived.
+     */
+    private fun park() {
+        generation++
+        active = false
+        settled = true
+        retries = 0
+        lastPartial = ""
+        callbackListener = null
+        cancelPendingMiss()
+        cancelScheduledListen()
     }
 
     private fun beginAttempt(): Int {
@@ -379,10 +396,13 @@ class DeviceSpeechInput(
     private fun quietDestroy(instance: SpeechRecognizer?) {
         if (instance == null) return
         main.post {
+            SessionTrace.log("listen", "destroy")
             try {
                 instance.destroy()
+                SessionTrace.log("listen", "destroy done")
             } catch (error: RuntimeException) {
                 Log.w(TAG, "destroy failed", error)
+                SessionTrace.log("listen", error)
             }
         }
     }

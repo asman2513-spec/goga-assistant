@@ -46,31 +46,35 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import android.util.Log
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 
 @Composable
 fun AssistantOverlay(
+    host: OverlayHost,
     onClose: () -> Unit,
     onRequestMic: () -> Unit,
 ) {
     val context = LocalContext.current
+    val showToken = host.showToken.intValue
+    val hidden = host.hidden.value
     val phone = remember { AndroidPhoneGateway(context.applicationContext) }
     val dialog = remember { LocalDialogManager(LocalDialogEngine(phone = phone)) }
-    val reducer = remember { SessionReducer(dialog) }
-    val stateHolder = remember { mutableStateOf(SessionState()) }
+    val stateHolder = remember { mutableStateOf(PipeState()) }
     val state = stateHolder.value
-    val dispatch = remember<(SessionEvent) -> Unit> {
+    val dispatch = remember<(PipeIn) -> Unit> {
         { event ->
-            val next = reducer.reduce(stateHolder.value, event)
-            when (event) {
-                is SessionEvent.FinalText ->
-                    Log.i(TAG, "raw=${event.text} intent=${next.intent} reply=${next.reply}")
-                is SessionEvent.ListenFailed ->
-                    Log.w(TAG, "error=${event.failure}")
-                SessionEvent.ListenStarted -> Log.i(TAG, "listen requested")
-                else -> Unit
+            val previous = stateHolder.value
+            val next = reducePipe(previous, event)
+            if (next != previous) {
+                SessionTrace.log("pipe", "${previous.phase} + $event -> ${next.phase} ${next.intent} ${next.reply}")
+                Log.i(TAG, "${previous.phase} -> ${next.phase} intent=${next.intent}")
             }
             stateHolder.value = next
         }
@@ -79,13 +83,15 @@ fun AssistantOverlay(
     val speaker = remember { SystemSpeechOutput(context) }
     var micGranted by remember { mutableStateOf(hasMic(context)) }
     var askedForMic by remember { mutableStateOf(false) }
+    var autoListen by remember { mutableStateOf(true) }
     var russianVoice by remember { mutableStateOf<Boolean?>(null) }
     var draft by remember { mutableStateOf("") }
+    var closed by remember { mutableStateOf(false) }
     val listener = remember {
         object : SpeechListener {
-            override fun onPartial(text: String) = dispatch(SessionEvent.Partial(text))
-            override fun onFinal(text: String) = dispatch(SessionEvent.FinalText(text, voiceSource()))
-            override fun onFailure(failure: ListenFailure) = dispatch(SessionEvent.ListenFailed(failure))
+            override fun onPartial(text: String) = dispatch(PipeIn.Partial(text))
+            override fun onFinal(text: String) = dispatch(PipeIn.Heard(text, voiceSource()))
+            override fun onFailure(failure: ListenFailure) = dispatch(PipeIn.Missed(failure))
         }
     }
 
@@ -124,21 +130,17 @@ fun AssistantOverlay(
     fun closeOverlay() {
         speech.release()
         speaker.stop()
-        onClose()
+        dispatch(PipeIn.Hide)
+        if (!closed) {
+            closed = true
+            onClose()
+        }
     }
 
-    fun startListening() {
-        if (!micGranted || speech.mode == SpeechMode.UNAVAILABLE) {
-            Log.i(TAG, "listen skipped mic=$micGranted mode=${speech.mode}")
-            return
-        }
-        dispatch(SessionEvent.ListenStarted)
-        try {
-            speech.start(listener)
-        } catch (error: RuntimeException) {
-            Log.w(TAG, "listen start failed", error)
-            dispatch(SessionEvent.ListenFailed(ListenFailure.UNKNOWN))
-        }
+    fun finishIfNeeded() {
+        if (closed) return
+        closed = true
+        onClose()
     }
 
     LaunchedEffect(micGranted) {
@@ -149,38 +151,95 @@ fun AssistantOverlay(
         }
     }
 
-    LaunchedEffect(
-        state.turn,
-        state.speaking,
-        micGranted,
-        state.preferText,
-        state.failedListens,
-        speech.mode,
-    ) {
-        val current = stateHolder.value
-        if (current.speaking || current.preferText || current.listening || current.handsOff) return@LaunchedEffect
-        if (!micGranted || speech.mode == SpeechMode.UNAVAILABLE) return@LaunchedEffect
-        startListening()
+    LaunchedEffect(showToken) {
+        SessionTrace.log("pipe", "show token=$showToken")
+        autoListen = true
+        closed = false
+        dispatch(PipeIn.Show)
     }
 
-    LaunchedEffect(state.turn) {
-        val current = stateHolder.value
-        if (current.turn == 0 || current.reply.isBlank()) return@LaunchedEffect
-        val launch = current.launch
-        if (launch != null) speech.release()
-        speaker.speak(current.reply) {
-            if (launch == null) {
-                dispatch(SessionEvent.SpeechFinished)
-                return@speak
+    LaunchedEffect(hidden) {
+        if (!hidden) return@LaunchedEffect
+        SessionTrace.log("pipe", "hide")
+        speaker.stop()
+        speech.release()
+        dispatch(PipeIn.Hide)
+    }
+
+    LaunchedEffect(state.phase, state.generation, micGranted, autoListen, hidden, speech.mode) {
+        val snap = stateHolder.value
+        val generation = snap.generation
+        try {
+            when (snap.phase) {
+                PipePhase.Idle -> {
+                    if (hidden || !autoListen || snap.preferText) return@LaunchedEffect
+                    if (!micGranted || speech.mode == SpeechMode.UNAVAILABLE) return@LaunchedEffect
+                    dispatch(PipeIn.ArmListen)
+                }
+                PipePhase.Listening -> {
+                    try {
+                        speech.start(listener)
+                    } catch (error: RuntimeException) {
+                        SessionTrace.log("listen", error)
+                        dispatch(PipeIn.Fault("Не смог слушать."))
+                        return@LaunchedEffect
+                    }
+                    delay(LISTEN_TIMEOUT_MS)
+                    if (same(stateHolder.value, PipePhase.Listening, generation)) dispatch(PipeIn.ListenTimeout)
+                }
+                PipePhase.Thinking -> {
+                    val heard = snap.lastUser
+                    val source = snap.source
+                    val turn = try {
+                        withTimeoutOrNull(THINK_TIMEOUT_MS) {
+                            withContext(Dispatchers.Default) {
+                                synchronized(dialog) {
+                                    dialog.onUserText(heard, source.ifBlank { textSource() })
+                                }
+                            }
+                        }
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (error: Throwable) {
+                        SessionTrace.log("think", error)
+                        DialogTurn(DialogPhase.SPEAKING, "Не вышло разобрать.", false, "fault")
+                    }
+                    if (!same(stateHolder.value, PipePhase.Thinking, generation)) return@LaunchedEffect
+                    if (turn == null) dispatch(PipeIn.ThinkTimeout) else dispatch(PipeIn.Thought(turn))
+                }
+                PipePhase.Speaking -> {
+                    speech.stop()
+                    val reply = snap.reply
+                    speaker.speak(reply) {
+                        if (same(stateHolder.value, PipePhase.Speaking, generation)) dispatch(PipeIn.SpeechDone)
+                    }
+                    delay(SPEAK_TIMEOUT_MS)
+                    if (same(stateHolder.value, PipePhase.Speaking, generation)) {
+                        speaker.stop()
+                        dispatch(PipeIn.SpeechTimeout)
+                    }
+                }
+                PipePhase.Acting -> {
+                    val launch = snap.launch
+                    val opened = try {
+                        launch != null && phone.performLaunch(launch, host.launch)
+                    } catch (error: Throwable) {
+                        SessionTrace.log("act", error)
+                        false
+                    }
+                    if (!same(stateHolder.value, PipePhase.Acting, generation)) return@LaunchedEffect
+                    dispatch(PipeIn.ActDone(opened))
+                    if (opened && launch?.leavesSession == true) finishIfNeeded()
+                    delay(ACT_TIMEOUT_MS)
+                    if (same(stateHolder.value, PipePhase.Acting, generation)) dispatch(PipeIn.ActTimeout)
+                }
+                PipePhase.Close -> finishIfNeeded()
             }
-            val opened = phone.performLaunch(launch)
-            if (opened && launch.leavesSession) {
-                onClose()
-            } else if (!opened) {
-                dispatch(SessionEvent.LaunchFailed)
-            } else {
-                dispatch(SessionEvent.SpeechFinished)
-            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            SessionTrace.log("pipe", error)
+            if (stateHolder.value.generation == generation) dispatch(PipeIn.Fault("Сбой. Слушаю снова."))
         }
     }
 
@@ -233,6 +292,11 @@ fun AssistantOverlay(
                         text = shownStatus(micGranted, speech.mode, state.status),
                         style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.primary,
+                    )
+                    Text(
+                        text = pipePhaseLine(state),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     if (speech.mode == SpeechMode.SYSTEM) {
                         Text(
@@ -287,20 +351,25 @@ fun AssistantOverlay(
                             onClick = {
                                 val granted = hasMic(context)
                                 micGranted = granted
-                                if (state.listening) {
+                                if (state.phase == PipePhase.Listening) {
+                                    autoListen = false
                                     speech.stop()
-                                    dispatch(SessionEvent.ListenStopped)
+                                    dispatch(PipeIn.Pause)
                                 } else if (!granted) {
                                     onRequestMic()
                                 } else {
-                                    startListening()
+                                    autoListen = true
+                                    if (stateHolder.value.phase == PipePhase.Idle) dispatch(PipeIn.ArmListen)
                                 }
                             },
-                            enabled = micGranted && speech.mode != SpeechMode.UNAVAILABLE,
+                            enabled = micGranted && speech.mode != SpeechMode.UNAVAILABLE &&
+                                state.phase != PipePhase.Thinking &&
+                                state.phase != PipePhase.Speaking &&
+                                state.phase != PipePhase.Acting,
                         ) {
                             Text(
                                 stringResource(
-                                    if (state.listening) R.string.overlay_stop else R.string.overlay_listen,
+                                    if (state.phase == PipePhase.Listening) R.string.overlay_stop else R.string.overlay_listen,
                                 ),
                             )
                         }
@@ -310,9 +379,10 @@ fun AssistantOverlay(
                             modifier = Modifier
                                 .weight(1f)
                                 .onFocusEvent { focus ->
-                                    if (focus.isFocused && stateHolder.value.listening) {
+                                    if (focus.isFocused && stateHolder.value.phase == PipePhase.Listening) {
+                                        autoListen = false
                                         speech.stop()
-                                        dispatch(SessionEvent.ListenStopped)
+                                        dispatch(PipeIn.Pause)
                                     }
                                 },
                             placeholder = { Text(stringResource(R.string.overlay_hint)) },
@@ -324,6 +394,7 @@ fun AssistantOverlay(
                                         onDraft = { draft = it },
                                         speech = speech,
                                         dispatch = dispatch,
+                                        resume = { autoListen = true },
                                     )
                                 },
                             ),
@@ -336,6 +407,7 @@ fun AssistantOverlay(
                                     onDraft = { draft = it },
                                     speech = speech,
                                     dispatch = dispatch,
+                                    resume = { autoListen = true },
                                 )
                             },
                             enabled = draft.isNotBlank(),
@@ -360,14 +432,24 @@ private fun submitDraft(
     draft: String,
     onDraft: (String) -> Unit,
     speech: SpeechToText,
-    dispatch: (SessionEvent) -> Unit,
+    dispatch: (PipeIn) -> Unit,
+    resume: () -> Unit,
 ) {
     val text = draft.trim()
     if (text.isEmpty()) return
     speech.stop()
     onDraft("")
-    dispatch(SessionEvent.FinalText(text, textSource()))
+    resume()
+    dispatch(PipeIn.Heard(text, textSource()))
 }
+
+private fun same(state: PipeState, phase: PipePhase, generation: Int): Boolean =
+    state.phase == phase && state.generation == generation
+
+private const val LISTEN_TIMEOUT_MS = 10_000L
+private const val THINK_TIMEOUT_MS = 2_000L
+private const val SPEAK_TIMEOUT_MS = 12_000L
+private const val ACT_TIMEOUT_MS = 5_000L
 
 private const val TAG = "Goga/Route"
 

@@ -17,6 +17,8 @@ class GogaInteractionSession(context: Context) : VoiceInteractionSession(
     ContextThemeWrapper(context, R.style.Theme_Goga_Session),
 ) {
     private val main = Handler(Looper.getMainLooper())
+    private val ownPackage = context.packageName
+    private val host = OverlayHost(shown = false)
 
     init {
         setTheme(R.style.Theme_Goga_Session)
@@ -65,7 +67,9 @@ class GogaInteractionSession(context: Context) : VoiceInteractionSession(
 
     override fun onCreate() {
         super.onCreate()
+        host.launch = { intent -> launchFromSession(intent) }
         Log.i(TAG, "session create")
+        SessionTrace.log("session", "create")
         prepareWindow()
         setKeepAwake(true)
     }
@@ -73,14 +77,20 @@ class GogaInteractionSession(context: Context) : VoiceInteractionSession(
     override fun onShow(args: Bundle?, showFlags: Int) {
         super.onShow(args, showFlags)
         Log.i(TAG, "session show flags=$showFlags")
+        SessionTrace.log("session", "show flags=$showFlags")
+        host.noteShow()
     }
 
     override fun onHide() {
+        SessionTrace.log("session", "hide")
+        host.noteHide()
         super.onHide()
         Log.i(TAG, "session hide")
     }
 
     override fun onDestroy() {
+        SessionTrace.log("session", "destroy")
+        host.noteHide()
         Log.i(TAG, "session destroy")
         super.onDestroy()
     }
@@ -107,11 +117,25 @@ class GogaInteractionSession(context: Context) : VoiceInteractionSession(
         val root = SessionComposeRoot(context)
         root.setSessionContent {
             AssistantOverlay(
+                host = host,
                 onClose = { finish() },
                 onRequestMic = { requestMicPermission() },
             )
         }
         return root
+    }
+
+    private fun launchFromSession(intent: Intent): Boolean {
+        SessionTrace.log("act", "session ${intent.action} ${intent.component}")
+        return try {
+            if (intent.component?.packageName == ownPackage) startAssistantActivity(intent)
+            else startVoiceActivity(intent)
+            true
+        } catch (error: Exception) {
+            Log.w(TAG, "voice activity failed", error)
+            SessionTrace.log("act", error)
+            false
+        }
     }
 
     private fun requestMicPermission() {
