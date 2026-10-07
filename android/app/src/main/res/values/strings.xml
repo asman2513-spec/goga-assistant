@@ -17,7 +17,7 @@
     <string name="settings_make_assistant">Сделать помощником по умолчанию</string>
     <string name="settings_default_apps">Приложения по умолчанию</string>
     <string name="settings_try_system">Открыть системную сессию</string>
-    <string name="settings_role_hint">На Honor: Настройки → Приложения → Приложения по умолчанию → Цифровой помощник → Гога. Затем Специальные возможности → Быстрый доступ и жесты → вызов помощника кнопкой питания. Если в списке только Google, сначала нажмите кнопку выше: система должна показать Гогу, потому что в приложении есть VoiceInteractionService.</string>
+    <string name="settings_role_hint">На Honor: Настройки → Приложения → Приложения по умолчанию → Цифровой помощник → Гога. Затем Специальные возможности → Быстрый доступ и жесты → вызов помощника кнопкой питания.</string>
     <string name="settings_voice_title">Голос</string>
     <string name="settings_voice_pack">Офлайн-распознавание речи</string>
     <string name="settings_tts">Синтез речи</string>

@@ -30,6 +30,11 @@ fun Context.assistantRoleRequest(): Intent? {
 
 fun Context.defaultAppsSettings(): Intent = Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS)
 
+/** Digital-assistant screen. Not every MagicOS build exposes this action. */
+fun Context.digitalAssistantSettings(): Intent = Intent(ACTION_VOICE_INTERACTION_SETTINGS)
+
+private const val ACTION_VOICE_INTERACTION_SETTINGS = "android.settings.VOICE_INTERACTION_SETTINGS"
+
 fun Context.voiceInputSettings(): Intent = Intent(Settings.ACTION_VOICE_INPUT_SETTINGS)
 
 fun Context.systemAssistIntent(): Intent =

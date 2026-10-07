@@ -28,7 +28,7 @@
 | `:feature:notes` | Экран заметок |
 | `:feature:tasks` | Экран задач и `ReminderChannel` |
 | `:feature:calendar` | Блок календаря на «Сегодня» и `CalendarProvider` |
-| `:feature:assistant` | `VoiceInteractionService`, оверлей, on-device STT (ru-RU), системный TTS, локальный диалог |
+| `:feature:assistant` | `VoiceInteractionService`, служба распознавания для списка помощников, оверлей, on-device STT (ru-RU), системный TTS, локальный диалог |
 
 `ReminderChannel`: сейчас задуманы `local_alarm` (v1, будильник телефона), `push`, `sms`, `call`. Реализаций доставки нет.
 

@@ -40,6 +40,7 @@ import app.goga.assistant.assistantRoleRequest
 import app.goga.assistant.assistantRoleState
 import app.goga.assistant.batteryOptimizationRequest
 import app.goga.assistant.defaultAppsSettings
+import app.goga.assistant.digitalAssistantSettings
 import app.goga.assistant.ignoresBatteryOptimizations
 import app.goga.assistant.systemAssistIntent
 import app.goga.assistant.ttsSettingsIntent
@@ -80,7 +81,11 @@ fun SettingsScreen() {
                 onClick = {
                     val request = context.assistantRoleRequest()
                     if (request == null) {
-                        launch(context, context.defaultAppsSettings(), noActivity)
+                        launchFirst(
+                            context,
+                            listOf(context.digitalAssistantSettings(), context.defaultAppsSettings()),
+                            noActivity,
+                        )
                     } else {
                         roleLauncher.launch(request)
                     }
@@ -165,11 +170,19 @@ private fun roleLabel(role: AssistantRoleState): String = when {
 }
 
 private fun launch(context: Context, intent: Intent, fallback: String) {
-    try {
-        context.startActivity(intent)
-    } catch (_: ActivityNotFoundException) {
-        Toast.makeText(context, fallback, Toast.LENGTH_LONG).show()
+    launchFirst(context, listOf(intent), fallback)
+}
+
+private fun launchFirst(context: Context, intents: List<Intent>, fallback: String) {
+    for (intent in intents) {
+        try {
+            context.startActivity(intent)
+            return
+        } catch (_: ActivityNotFoundException) {
+            continue
+        }
     }
+    Toast.makeText(context, fallback, Toast.LENGTH_LONG).show()
 }
 
 private fun requestTile(context: Context) {

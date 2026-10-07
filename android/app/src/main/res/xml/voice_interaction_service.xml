@@ -1,5 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  recognitionService is mandatory. VoiceInteractionServiceInfo sets parseError
+  "No recognitionService specified" when it is absent and never publishes the
+  service. Settings and MagicOS then omit the package from the assistant list.
+-->
 <voice-interaction-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:recognitionService="app.goga.assistant.session.GogaRecognitionService"
     android:sessionService="app.goga.assistant.session.GogaSessionService"
     android:settingsActivity="app.goga.assistant.MainActivity"
     android:supportsAssist="true"
