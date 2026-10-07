@@ -56,6 +56,9 @@ class LocalDialogEngine(
             "help" -> return say(HELP_REPLY, "help")
             "thanks" -> return say("Пожалуйста.", "thanks")
             "yes", "no" -> return say("Хорошо.", "yes-no")
+            "call" -> return say(CALL_REPLY, "call")
+            "sms" -> return say(SMS_REPLY, "sms")
+            "open-app" -> return say(OPEN_REPLY, "open-app")
         }
         destructive(text)?.let { parsed ->
             if (parsed.rest.isEmpty()) {
@@ -235,6 +238,9 @@ class LocalDialogEngine(
 
         const val HELP_REPLY =
             "Пока умею слушать и отвечать. Спросите, который час, или просто скажите фразу. Заметки, напоминания и бот подключу позже."
+        const val CALL_REPLY = "Пока не умею звонить."
+        const val SMS_REPLY = "Пока не умею отправлять сообщения."
+        const val OPEN_REPLY = "Пока не умею открывать приложения."
 
         fun normalize(raw: String): String = raw
             .lowercase(Locale.forLanguageTag("ru"))
@@ -253,7 +259,44 @@ class LocalDialogEngine(
             key in THANKS -> "thanks"
             key in YES_WORDS -> "yes"
             key in NO_WORDS -> "no"
-            else -> containedIntent(key)
+            else -> capabilityIntent(key) ?: containedIntent(key)
+        }
+
+        fun capabilityIntent(key: String): String? = when {
+            isCall(key) -> "call"
+            isSms(key) -> "sms"
+            isOpenApp(key) -> "open-app"
+            else -> null
+        }
+
+        fun wordsOf(key: String): List<String> = key.split(" ").filter { it.isNotEmpty() }
+
+        fun isCall(key: String): Boolean = wordsOf(key).any { word ->
+            word.startsWith("позвон") ||
+                word.startsWith("перезвон") ||
+                word.startsWith("дозвон") ||
+                word == "набери" ||
+                word == "набрать" ||
+                word == "наберите" ||
+                word == "наберу" ||
+                word == "наберем" ||
+                word == "звонок" ||
+                word == "звонки"
+        }
+
+        fun isSms(key: String): Boolean {
+            val words = wordsOf(key)
+            if (words.any { it == "sms" || it == "эсэмэс" || it.startsWith("смс") }) return true
+            val send = words.any {
+                it.startsWith("отправ") || it.startsWith("пошл") || it == "напиши" ||
+                    it == "написать" || it == "напишите"
+            }
+            val message = words.any { it.startsWith("сообщен") }
+            return send && message
+        }
+
+        fun isOpenApp(key: String): Boolean = wordsOf(key).any { word ->
+            word.startsWith("откро") || word.startsWith("запуст")
         }
 
         /** Clock questions, including the spoken form «сколько время» and STT slips. */
@@ -304,7 +347,8 @@ class LocalDialogEngine(
         fun isStandaloneIntent(text: String): Boolean {
             val intent = knownIntent(stripLeadIn(text))
             return intent == "greeting" || intent == "time" || intent == "date" ||
-                intent == "help" || intent == "thanks"
+                intent == "help" || intent == "thanks" ||
+                intent == "call" || intent == "sms" || intent == "open-app"
         }
 
         fun destructive(text: String): Parsed? {

@@ -395,6 +395,9 @@ class DeviceSpeechInput(
         putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
         putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
         putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, appContext.packageName)
+        // Text only. Without this, «позвони» is a system voice action: the recognizer
+        // opens the dialer or waits on the assistant session, and the UI freezes.
+        putExtra("android.speech.extra.DICTATION_MODE", true)
         putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 1_500)
         putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1_400)
         putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1_400)

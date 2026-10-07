@@ -5,6 +5,8 @@ import android.content.Intent
 import android.graphics.Color
 import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.service.voice.VoiceInteractionSession
 import android.util.Log
 import android.view.WindowManager
@@ -14,8 +16,51 @@ import androidx.core.view.WindowCompat
 class GogaInteractionSession(context: Context) : VoiceInteractionSession(
     ContextThemeWrapper(context, R.style.Theme_Goga_Session),
 ) {
+    private val main = Handler(Looper.getMainLooper())
+
     init {
         setTheme(R.style.Theme_Goga_Session)
+    }
+
+    override fun onGetSupportedCommands(commands: Array<out String>?): BooleanArray {
+        Log.i(TAG, "commands ${commands?.joinToString().orEmpty()}")
+        return BooleanArray(commands?.size ?: 0)
+    }
+
+    override fun onRequestCommand(request: CommandRequest) {
+        Log.w(TAG, "command ${request.command} from ${request.callingPackage}")
+        refuse(request)
+    }
+
+    override fun onRequestCompleteVoice(request: CompleteVoiceRequest) {
+        Log.w(TAG, "complete voice from ${request.callingPackage}")
+        refuse(request)
+    }
+
+    override fun onRequestConfirmation(request: ConfirmationRequest) {
+        Log.w(TAG, "confirmation from ${request.callingPackage}")
+        refuse(request)
+    }
+
+    override fun onRequestPickOption(request: PickOptionRequest) {
+        Log.w(TAG, "pick option from ${request.callingPackage}")
+        refuse(request)
+    }
+
+    override fun onRequestAbortVoice(request: AbortVoiceRequest) {
+        Log.w(TAG, "abort voice from ${request.callingPackage}")
+        refuse(request)
+    }
+
+    private fun refuse(request: Request) {
+        main.post {
+            try {
+                if (request.isActive) request.cancel()
+                Log.i(TAG, "voice request cancelled")
+            } catch (error: RuntimeException) {
+                Log.w(TAG, "voice request cancel failed", error)
+            }
+        }
     }
 
     override fun onCreate() {

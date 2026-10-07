@@ -57,6 +57,30 @@ class LocalDialogEngineTest {
     }
 
     @Test
+    fun callStaysOnScreenWithoutAcceptingThePhrase() {
+        val phrases = listOf("позвони", "Позвони!", "позвони маме", "набери", "перезвони")
+        for (phrase in phrases) {
+            val turn = LocalDialogEngine { clock }.onUserText(phrase)
+            assertEquals(phrase, "call", turn.intent)
+            assertEquals("Пока не умею звонить.", turn.reply)
+            assertFalse(turn.asksConfirmation)
+        }
+        val engine = LocalDialogEngine { clock }
+        engine.onUserText("позвони маме")
+        assertEquals("Слушаю.", engine.onUserText("привет").reply)
+    }
+
+    @Test
+    fun smsAndOpenAppStayLocal() {
+        val local = LocalDialogEngine { clock }
+        assertEquals("sms", local.onUserText("отправь смс").intent)
+        assertEquals("Пока не умею отправлять сообщения.", local.onUserText("напиши сообщение маме").reply)
+        assertEquals("open-app", local.onUserText("открой камеру").intent)
+        assertEquals("Пока не умею открывать приложения.", local.onUserText("запусти настройки").reply)
+        assertEquals("accept", local.onUserText("купи молоко").intent)
+    }
+
+    @Test
     fun ordinaryPhraseIsAcceptedWithoutAQuestion() {
         val turn = engine.onUserText("Купи молоко")
         assertEquals("Принял: «Купи молоко».", turn.reply)
