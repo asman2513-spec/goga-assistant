@@ -1,0 +1,103 @@
+package app.goga.assistant.session
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class SessionReducerTest {
+    private val reducer = SessionReducer(LocalDialogManager(LocalDialogEngine()))
+
+    @Test
+    fun twoMissesSwitchToText() {
+        val once = reducer.reduce(SessionState(), SessionEvent.ListenFailed(ListenFailure.NO_MATCH))
+        assertEquals("Не расслышал.", once.status)
+        assertFalse(once.preferText)
+        assertEquals(1, once.failedListens)
+
+        val twice = reducer.reduce(once, SessionEvent.ListenFailed(ListenFailure.TIMEOUT))
+        assertEquals("Давайте текстом.", twice.status)
+        assertTrue(twice.preferText)
+        assertEquals(DialogPhase.FAILED, twice.phase)
+        assertFalse(twice.listening)
+    }
+
+    @Test
+    fun failureClearsSpeakingSoTheSessionCanListenAgain() {
+        val speaking = SessionState(speaking = true, listening = true, partial = "который час")
+        val failed = reducer.reduce(speaking, SessionEvent.ListenFailed(ListenFailure.NO_MATCH))
+        assertFalse(failed.speaking)
+        assertFalse(failed.listening)
+        assertEquals("", failed.partial)
+        assertEquals("Не расслышал.", failed.status)
+    }
+
+    @Test
+    fun languageFailureDoesNotForceTextMode() {
+        val failed = reducer.reduce(SessionState(), SessionEvent.ListenFailed(ListenFailure.LANGUAGE))
+        assertFalse(failed.preferText)
+        assertTrue(failed.status.contains("русского"))
+    }
+
+    @Test
+    fun recognizedTextClearsFailuresAndSpeaks() {
+        val failed = reducer.reduce(SessionState(), SessionEvent.ListenFailed(ListenFailure.NO_MATCH))
+        val heard = reducer.reduce(failed, SessionEvent.FinalText("привет", textSource()))
+        assertEquals(0, heard.failedListens)
+        assertFalse(heard.preferText)
+        assertEquals("Слушаю.", heard.reply)
+        assertTrue(heard.speaking)
+        assertEquals(DialogPhase.SPEAKING, heard.phase)
+        assertEquals("привет", heard.lastUser)
+    }
+
+    @Test
+    fun speechFinishedKeepsTheReply() {
+        val heard = reducer.reduce(SessionState(), SessionEvent.FinalText("купи молоко", voiceSource()))
+        val done = reducer.reduce(heard, SessionEvent.SpeechFinished)
+        assertEquals(heard.reply, done.reply)
+        assertFalse(done.speaking)
+        assertEquals(DialogPhase.LISTENING, done.phase)
+        assertEquals("Слушаю", done.status)
+    }
+
+    @Test
+    fun phoneLaunchIsCopiedAndClearedWhenSpeechEnds() {
+        val heard = reducer.reduce(SessionState(), SessionEvent.FinalText("открой камеру", textSource()))
+        assertEquals("open-app", heard.intent)
+        assertTrue(heard.launch is PhoneLaunch.OpenPackage)
+        assertTrue(heard.handsOff)
+        assertTrue(heard.speaking)
+        val done = reducer.reduce(heard, SessionEvent.SpeechFinished)
+        assertEquals(null, done.launch)
+        assertFalse(done.handsOff)
+        assertFalse(done.speaking)
+    }
+
+    @Test
+    fun failedLaunchDropsTheHandoffAndSpeaks() {
+        val heard = reducer.reduce(SessionState(), SessionEvent.FinalText("открой камеру", textSource()))
+        val failed = reducer.reduce(heard, SessionEvent.LaunchFailed)
+        assertEquals(null, failed.launch)
+        assertEquals("Не получилось открыть.", failed.reply)
+        assertTrue(failed.speaking)
+        assertFalse(failed.handsOff)
+    }
+
+    @Test
+    fun speechFinishedWhileWaitingKeepsTheQuestion() {
+        val asked = reducer.reduce(SessionState(), SessionEvent.FinalText("удали", voiceSource()))
+        val done = reducer.reduce(asked, SessionEvent.SpeechFinished)
+        assertEquals(DialogPhase.AWAITING_SHORT_REPLY, done.phase)
+        assertEquals("Нужно уточнение", done.status)
+        assertEquals(asked.reply, done.reply)
+    }
+}
+
+class ListenFailureMessageTest {
+    @Test
+    fun timeoutAndNoMatchShareTheShortLine() {
+        assertEquals(listenFailureMessage(ListenFailure.NO_MATCH), listenFailureMessage(ListenFailure.TIMEOUT))
+        assertEquals("Не расслышал.", listenFailureMessage(ListenFailure.TIMEOUT))
+    }
+}

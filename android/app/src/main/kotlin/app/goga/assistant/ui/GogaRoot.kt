@@ -1,11 +1,13 @@
 package app.goga.assistant.ui
 
+import android.content.Intent
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.Button
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -17,6 +19,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -24,6 +27,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import app.goga.assistant.AssistantActivity
 import app.goga.assistant.R
 import app.goga.calendar.CalendarSection
 import app.goga.notes.NotesScreen
@@ -91,10 +95,20 @@ private fun AppTab.icon(): ImageVector = when (this) {
 
 @Composable
 private fun TodayScreen() {
+    val context = LocalContext.current
     PlaceholderPage(
         title = stringResource(R.string.today_title),
         body = stringResource(R.string.today_body),
         extra = stringResource(R.string.today_assistant),
-        footer = { CalendarSection() },
+        footer = {
+            Button(
+                onClick = {
+                    context.startActivity(Intent(context, AssistantActivity::class.java))
+                },
+            ) {
+                Text(stringResource(R.string.talk_button))
+            }
+            CalendarSection()
+        },
     )
 }
