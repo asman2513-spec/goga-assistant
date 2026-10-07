@@ -5,6 +5,7 @@ import android.os.Handler
 import android.os.Looper
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import android.util.Log
 import java.util.Locale
 import java.util.UUID
 
@@ -54,6 +55,7 @@ class SystemSpeechOutput(
     }
 
     override fun speak(text: String, onDone: () -> Unit) {
+        Log.i(TAG, "speak len=${text.length}")
         val current = engine
         val token = ++generation
         if (!ready || current == null) {
@@ -80,7 +82,10 @@ class SystemSpeechOutput(
             }
         })
         val queued = current.speak(text, TextToSpeech.QUEUE_FLUSH, null, utterance)
-        if (queued == TextToSpeech.ERROR) finish(token, onDone)
+        if (queued == TextToSpeech.ERROR) {
+            Log.w(TAG, "speak rejected")
+            finish(token, onDone)
+        }
     }
 
     override fun stop() {
@@ -103,8 +108,13 @@ class SystemSpeechOutput(
 
     private fun finish(token: Int, onDone: () -> Unit) {
         if (token != generation) return
+        Log.i(TAG, "speak finished")
         main.post {
             if (token == generation) onDone()
         }
+    }
+
+    private companion object {
+        const val TAG = "Goga/Tts"
     }
 }

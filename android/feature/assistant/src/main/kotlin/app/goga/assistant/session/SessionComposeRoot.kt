@@ -25,9 +25,13 @@ class SessionComposeRoot(context: Context) : FrameLayout(context) {
     private val composeView = ComposeView(context)
 
     init {
+        isFocusable = true
+        isFocusableInTouchMode = true
         setViewTreeLifecycleOwner(owners)
         setViewTreeViewModelStoreOwner(owners)
         setViewTreeSavedStateRegistryOwner(owners)
+        composeView.isFocusable = true
+        composeView.isFocusableInTouchMode = true
         composeView.setViewTreeLifecycleOwner(owners)
         composeView.setViewTreeViewModelStoreOwner(owners)
         composeView.setViewTreeSavedStateRegistryOwner(owners)

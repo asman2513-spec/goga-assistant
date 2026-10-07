@@ -6,6 +6,7 @@ import android.graphics.Color
 import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
 import android.service.voice.VoiceInteractionSession
+import android.util.Log
 import android.view.WindowManager
 import android.view.ContextThemeWrapper
 import androidx.core.view.WindowCompat
@@ -19,8 +20,14 @@ class GogaInteractionSession(context: Context) : VoiceInteractionSession(
 
     override fun onCreate() {
         super.onCreate()
+        Log.i(TAG, "session create")
         prepareWindow()
         setKeepAwake(true)
+    }
+
+    override fun onShow(args: Bundle?, showFlags: Int) {
+        super.onShow(args, showFlags)
+        Log.i(TAG, "session show flags=$showFlags")
     }
 
     override fun onPrepareShow(args: Bundle?, showFlags: Int) {
@@ -37,6 +44,8 @@ class GogaInteractionSession(context: Context) : VoiceInteractionSession(
                 WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON,
         )
         WindowCompat.setDecorFitsSystemWindows(dialogWindow, false)
+        @Suppress("DEPRECATION")
+        dialogWindow.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
     }
 
     override fun onCreateContentView(): android.view.View {
@@ -56,6 +65,7 @@ class GogaInteractionSession(context: Context) : VoiceInteractionSession(
     }
 
     private companion object {
+        const val TAG = "Goga/Session"
         const val MIC_ACTIVITY = "app.goga.assistant.MicPermissionActivity"
     }
 }

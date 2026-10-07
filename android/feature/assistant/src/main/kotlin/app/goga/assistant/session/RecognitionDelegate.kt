@@ -6,11 +6,47 @@ data class RecognizerCandidate(
 )
 
 /**
- * Picks another app's [android.speech.RecognitionService].
- * Goga's own service only satisfies the assistant metadata contract and must
- * not be chosen: binding back to this package loops.
- * Prefer the on-device Google engine, then the Google app, then Honor/Huawei.
+ * Recognizer the overlay should bind to. The configured on-device engine wins when it
+ * belongs to another package. Goga's own service is never returned: after the assistant
+ * role is granted the system points the default recognizer at that service, and binding
+ * to it swallows the utterance.
+ *
+ * Installed engines are preferred in this order: Google on-device, Android System
+ * Intelligence, the Google app, then Honor, then Huawei.
  */
+fun chooseRecognizer(
+    configuredOnDevice: RecognizerCandidate?,
+    installed: List<RecognizerCandidate>,
+    ownPackage: String,
+): RecognizerCandidate? {
+    if (configuredOnDevice != null && configuredOnDevice.isUsable(ownPackage)) {
+        return configuredOnDevice
+    }
+    return pickRecognitionDelegate(installed, ownPackage)
+}
+
+/** First choice, then one fallback outside that component. */
+fun recognizerOrder(
+    configuredOnDevice: RecognizerCandidate?,
+    installed: List<RecognizerCandidate>,
+    ownPackage: String,
+): List<RecognizerCandidate> {
+    val primary = chooseRecognizer(configuredOnDevice, installed, ownPackage) ?: return emptyList()
+    val rest = installed.filterNot { it.sameComponent(primary) }
+    val secondary = pickRecognitionDelegate(rest, ownPackage)
+    return if (secondary == null || secondary.sameComponent(primary)) {
+        listOf(primary)
+    } else {
+        listOf(primary, secondary)
+    }
+}
+
+private fun RecognizerCandidate.isUsable(ownPackage: String): Boolean =
+    packageName.isNotBlank() && className.isNotBlank() && packageName != ownPackage
+
+private fun RecognizerCandidate.sameComponent(other: RecognizerCandidate): Boolean =
+    packageName == other.packageName && className == other.className
+
 fun pickRecognitionDelegate(
     candidates: List<RecognizerCandidate>,
     ownPackage: String,

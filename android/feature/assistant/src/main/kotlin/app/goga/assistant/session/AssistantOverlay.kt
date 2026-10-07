@@ -44,6 +44,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -60,11 +61,24 @@ fun AssistantOverlay(
     val stateHolder = remember { mutableStateOf(SessionState()) }
     val state = stateHolder.value
     val dispatch = remember<(SessionEvent) -> Unit> {
-        { event -> stateHolder.value = reducer.reduce(stateHolder.value, event) }
+        { event ->
+            when (event) {
+                is SessionEvent.FinalText ->
+                    Log.i(TAG, "route source=${event.source} text=${event.text}")
+                is SessionEvent.ListenFailed ->
+                    Log.w(TAG, "listen failed ${event.failure}")
+                SessionEvent.ListenStarted -> Log.i(TAG, "listen requested")
+                else -> Unit
+            }
+            val next = reducer.reduce(stateHolder.value, event)
+            if (event is SessionEvent.FinalText) Log.i(TAG, "route reply=${next.reply}")
+            stateHolder.value = next
+        }
     }
     val speech = remember { DeviceSpeechInput(context) }
     val speaker = remember { SystemSpeechOutput(context) }
     var micGranted by remember { mutableStateOf(hasMic(context)) }
+    var askedForMic by remember { mutableStateOf(false) }
     var russianVoice by remember { mutableStateOf<Boolean?>(null) }
     var draft by remember { mutableStateOf("") }
     val listener = remember {
@@ -108,9 +122,25 @@ fun AssistantOverlay(
     }
 
     fun startListening() {
-        if (!micGranted || speech.mode == SpeechMode.UNAVAILABLE) return
+        if (!micGranted || speech.mode == SpeechMode.UNAVAILABLE) {
+            Log.i(TAG, "listen skipped mic=$micGranted mode=${speech.mode}")
+            return
+        }
         dispatch(SessionEvent.ListenStarted)
-        speech.start(listener)
+        try {
+            speech.start(listener)
+        } catch (error: RuntimeException) {
+            Log.w(TAG, "listen start failed", error)
+            dispatch(SessionEvent.ListenFailed(ListenFailure.UNKNOWN))
+        }
+    }
+
+    LaunchedEffect(micGranted) {
+        if (!micGranted && !askedForMic) {
+            askedForMic = true
+            Log.i(TAG, "requesting microphone")
+            onRequestMic()
+        }
     }
 
     LaunchedEffect(state.turn, state.speaking, micGranted, state.preferText, speech.mode) {
@@ -182,7 +212,7 @@ fun AssistantOverlay(
                         }
                     }
                     Text(
-                        text = state.status,
+                        text = shownStatus(micGranted, speech.mode, state.status),
                         style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.primary,
                     )
@@ -301,6 +331,13 @@ fun AssistantOverlay(
     }
 }
 
+@Composable
+private fun shownStatus(micGranted: Boolean, mode: SpeechMode, status: String): String = when {
+    !micGranted -> stringResource(R.string.overlay_mic_missing)
+    mode == SpeechMode.UNAVAILABLE -> stringResource(R.string.overlay_no_recognizer)
+    else -> status
+}
+
 private fun submitDraft(
     draft: String,
     onDraft: (String) -> Unit,
@@ -313,6 +350,8 @@ private fun submitDraft(
     onDraft("")
     dispatch(SessionEvent.FinalText(text, textSource()))
 }
+
+private const val TAG = "Goga/Route"
 
 private fun hasMic(context: Context): Boolean =
     ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==

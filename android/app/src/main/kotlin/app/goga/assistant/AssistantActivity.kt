@@ -1,6 +1,7 @@
 package app.goga.assistant
 
 import android.os.Bundle
+import android.util.Log
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -11,6 +12,7 @@ import app.goga.assistant.session.AssistantOverlay
 class AssistantActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Log.i(TAG, "activity overlay")
         setShowWhenLocked(true)
         setTurnScreenOn(true)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -25,5 +27,9 @@ class AssistantActivity : ComponentActivity() {
 
     private fun launchMicPrompt() {
         startActivity(android.content.Intent(this, MicPermissionActivity::class.java))
+    }
+
+    private companion object {
+        const val TAG = "Goga/Session"
     }
 }

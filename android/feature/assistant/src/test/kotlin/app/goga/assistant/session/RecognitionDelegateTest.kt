@@ -57,6 +57,40 @@ class RecognitionDelegateTest {
     }
 
     @Test
+    fun prefersConfiguredOnDeviceEngineOutsideOurPackage() {
+        val google = RecognizerCandidate(
+            "com.google.android.tts",
+            "com.google.android.apps.speech.tts.googletts.service.GoogleTTSRecognitionService",
+        )
+        val order = recognizerOrder(
+            configuredOnDevice = google,
+            installed = listOf(
+                RecognizerCandidate("app.goga.assistant", "app.goga.assistant.session.GogaRecognitionService"),
+                RecognizerCandidate("com.hihonor.voice", "com.hihonor.voice.Recognizer"),
+            ),
+            ownPackage = "app.goga.assistant",
+        )
+        assertEquals(google, order.first())
+        assertEquals("com.hihonor.voice", order.getOrNull(1)?.packageName)
+    }
+
+    @Test
+    fun skipsConfiguredEngineWhenItIsOurOwnService() {
+        val order = recognizerOrder(
+            configuredOnDevice = RecognizerCandidate(
+                "app.goga.assistant",
+                "app.goga.assistant.session.GogaRecognitionService",
+            ),
+            installed = listOf(
+                RecognizerCandidate("app.goga.assistant", "app.goga.assistant.session.GogaRecognitionService"),
+                RecognizerCandidate("com.hihonor.voice", "com.hihonor.voice.Recognizer"),
+            ),
+            ownPackage = "app.goga.assistant",
+        )
+        assertEquals(listOf("com.hihonor.voice"), order.map { it.packageName })
+    }
+
+    @Test
     fun returnsNullWhenOnlyOurselves() {
         val picked = pickRecognitionDelegate(
             listOf(
